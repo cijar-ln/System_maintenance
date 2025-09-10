@@ -38,6 +38,24 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# VERBOSE: Loading Win32 API for window manipulation (to minimize Explorer).
+$win32Api = @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    private const int SW_MINIMIZE = 6;
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    public static bool MinimizeWindow(IntPtr hWnd) {
+        return ShowWindow(hWnd, SW_MINIMIZE);
+    }
+}
+"@
+Add-Type -TypeDefinition $win32Api -Namespace WindowTools
+
 # --- GUI Components Definition ---
 # VERBOSE: Here, we are creating each individual component of our user interface as an object.
 
@@ -113,7 +131,26 @@ function Start-Maintenance {
     $commands = @(
         [pscustomobject]@{ Name = "Flushing DNS Cache";              Command = { ipconfig /flushdns } },
         [pscustomobject]@{ Name = "Forcing Group Policy Update";     Command = { gpupdate /force } },
-        [pscustomobject]@{ Name = "Restarting Windows Explorer";     Command = { Stop-Process -Name explorer -Force; Start-Process explorer } },
+        [pscustomobject]@{
+            Name = "Restarting Windows Explorer";
+            Command = {
+                Stop-Process -Name explorer -Force
+                # Start explorer and use -PassThru to get the process object back
+                $explorerProcess = Start-Process explorer -PassThru
+                # Wait a moment for the window to fully initialize
+                Start-Sleep -Seconds 2
+                try {
+                    # Use our new function to minimize the main window of that specific process
+                    [WindowTools.Win32]::MinimizeWindow($explorerProcess.MainWindowHandle) | Out-Null
+                    # Log this specific action to the GUI
+                    Log-Message "INFO: Minimized the new File Explorer window." -Color "Gray"
+                }
+                catch {
+                    # Log if it fails, but don't stop the script
+                    Log-Message "WARN: Could not find or minimize the new File Explorer window." -Color "Orange"
+                }
+            }
+        },
         [pscustomobject]@{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } },
         [pscustomobject]@{ Name = "Resetting Winsock Catalog";       Command = { netsh winsock reset } },
         [pscustomobject]@{ Name = "Resetting TCP/IP Stack";          Command = { netsh int ip reset } },

@@ -5,7 +5,12 @@
     This script provides a user-friendly interface to run system repairs, check for updates,
     and apply manufacturer-specific firmware. It handles administrative elevation and provides
     real-time logging of all its actions to both the GUI and a persistent text file.
+    It is compatible with both Windows PowerShell 5.1 and PowerShell 7+.
 #>
+
+# Load .NET GUI assemblies at the very beginning for PowerShell 7+ compatibility.
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
 #region --- Configuration ---
 
@@ -34,9 +39,6 @@ $maintenanceCommands = @(
 #region --- GUI Functions ---
 
 function Initialize-GUI {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
     $form = New-Object System.Windows.Forms.Form -Property @{
         Text          = "System Maintenance Tool"
         StartPosition = "CenterScreen"
@@ -80,13 +82,13 @@ function Log-Message {
         [Parameter(Mandatory = $true)]
         [string]$Message,
         [System.Drawing.Color]$Color = 'Black',
-        [string]$LogFilePath # NEW: Path for the text log file
+        [string]$LogFilePath
     )
     
     $timestamp = Get-Date -Format 'HH:mm:ss'
     $logEntry = "$timestamp - $Message"
 
-    # 1. Log to the GUI (unchanged)
+    # 1. Log to the GUI
     if ($GuiControls.Form.IsHandleCreated) {
         $logBox = $GuiControls.LogBox
         $logBox.SelectionStart = $logBox.TextLength
@@ -100,7 +102,7 @@ function Log-Message {
         Write-Host $logEntry
     }
 
-    # 2. NEW: Log to the text file
+    # 2. Log to the text file
     if ($LogFilePath) {
         try {
             Add-Content -Path $LogFilePath -Value $logEntry
@@ -119,7 +121,7 @@ function Invoke-LoggedCommand {
         [scriptblock]$Command,
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        [string]$LogFilePath # NEW: Pass the log file path down
+        [string]$LogFilePath
     )
     
     Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFilePath $LogFilePath
@@ -263,7 +265,7 @@ $gui.Form.Show()
 # Check for Administrator privileges
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
-# --- NEW: Set up the log file path ---
+# Set up the log file path
 $logFilePath = $null
 if ($isAdmin) {
     try {
@@ -278,9 +280,8 @@ if ($isAdmin) {
         Log-Message -GuiControls $gui -Message "WARNING: Could not create log directory. File logging will be disabled." -Color "Orange"
     }
 }
-# --- End of new section ---
 
-
+# Execute the appropriate workflow based on privileges
 if ($isAdmin) {
     Start-Maintenance -GuiControls $gui -LogFilePath $logFilePath
 }

@@ -44,10 +44,9 @@ Add-Type -AssemblyName System.Drawing
 # Create the main window (the form). This is the container for all other controls.
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "System Maintenance Tool"
-$mainForm.Size = New-Object System.Drawing.Size(600, 500)
 $mainForm.StartPosition = "CenterScreen"
-$mainForm.FormBorderStyle = 'FixedSingle'
-$mainForm.MaximizeBox = $false
+$mainForm.FormBorderStyle = 'Sizable'
+$mainForm.MaximizeBox = $true
 $mainForm.WindowState = 'Maximized'
 
 # Create a text label for the log box.

@@ -113,7 +113,13 @@ function Start-Maintenance {
     $commands = @(
         [pscustomobject]@{ Name = "Flushing DNS Cache";              Command = { ipconfig /flushdns } },
         [pscustomobject]@{ Name = "Forcing Group Policy Update";     Command = { gpupdate /force } },
-        [pscustomobject]@{ Name = "Restarting Windows Explorer";      Command = { Stop-Process -Name explorer -Force; Start-Process cmd -ArgumentList "/c start /min explorer.exe" -NoNewWindow } },
+        [pscustomobject]@{ Name = "Restarting Windows Explorer";      Command = { 
+    Stop-Process -Name explorer -Force; 
+    Start-Process explorer; 
+    Start-Sleep -Milliseconds 250;
+    $mainForm.TopMost = $true; 
+    $mainForm.TopMost = $false 
+} },
         [pscustomobject]@{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } },
         [pscustomobject]@{ Name = "Resetting Winsock Catalog";       Command = { netsh winsock reset } },
         [pscustomobject]@{ Name = "Resetting TCP/IP Stack";          Command = { netsh int ip reset } },

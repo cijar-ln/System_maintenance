@@ -53,7 +53,7 @@ $mainForm.WindowState = 'Maximized'
 $label = New-Object System.Windows.Forms.Label
 $label.Text = "Status Log:"
 $label.Dock = 'Top' # Stick to the top edge
-$label.Height = 15 # Give the label a fixed height
+$label.Height = 20 # Give the label a fixed height to prevent overlap
 
 # Create the main text box where all status messages and logs will be displayed.
 $logBox = New-Object System.Windows.Forms.RichTextBox
@@ -319,7 +319,8 @@ This tool will now close.
 else {
     # --- ADMIN WORKFLOW ---
     Log-Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green"
-    Start-Sleep -Seconds 2
+    # Force the UI to draw the message above before continuing
+    [System.Windows.Forms.Application]::DoEvents()
     
     Start-Maintenance
 }

@@ -4,8 +4,8 @@
 .DESCRIPTION
     This script provides a user-friendly interface to run system repairs, check for updates,
     and apply manufacturer-specific firmware. It handles administrative elevation and provides
-    real-time logging of all its actions. This version runs maintenance tasks in a background
-    thread to keep the UI responsive.
+    real-time logging of all its actions to both the UI and a log file. This version runs
+    maintenance tasks in a background thread to keep the UI responsive.
 #>
 
 #region --- Configuration ---
@@ -18,14 +18,14 @@ $config = @{
 
 # Define the sequence of maintenance commands to be executed.
 $maintenanceCommands = @(
-    @{ Name = "Flushing DNS Cache";               Command = { ipconfig /flushdns } },
-    @{ Name = "Forcing Group Policy Update";      Command = { gpupdate /force } },
-    @{ Name = "Resetting Winsock Catalog";        Command = { netsh winsock reset } },
-    @{ Name = "Resetting TCP/IP Stack";           Command = { netsh int ip reset } },
+    @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
+    @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
+    @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
+    @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
-    @{ Name = "Component Store Restore (DISM)";   Command = { DISM /Online /Cleanup-Image /RestoreHealth } },
+    @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth } },
     @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow } },
-    @{ Name = "Scheduling Disk Check (C:)";        Command = { cmd.exe /c "echo y | chkdsk C: /f /r" }; Note = "This will run on the next restart." }
+    @{ Name = "Scheduling Disk Check (C:)";       Command = { cmd.exe /c "echo y | chkdsk C: /f /r" }; Note = "This will run on the next restart." }
 )
 
 #endregion
@@ -73,6 +73,20 @@ if (-not $isAdmin) {
     exit
 }
 
+# --- Create Logging Directory and Define Log File Path ---
+$logDirectory = "C:\Program Files\Maintenance"
+if (-not (Test-Path -Path $logDirectory)) {
+    try {
+        New-Item -Path $logDirectory -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to create log directory at '$logDirectory'. Please check permissions.", "Error", "OK", "Error")
+        exit
+    }
+}
+$logFile = Join-Path -Path $logDirectory -ChildPath "SystemMaintenance_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+# --- End of Logging Configuration ---
+
 $gui = Initialize-GUI
 
 # Create a PowerShell runspace to run the maintenance in the background
@@ -80,19 +94,23 @@ $ps = [powershell]::Create()
 $ps.AddScript({
     # This entire script block runs on the background thread.
     # We pass in the required variables from the main script.
-    param($GuiControls, $maintenanceCommands, $config)
+    param($GuiControls, $maintenanceCommands, $config, $logFile)
     
     # --- CORE FUNCTIONS (Defined inside the runspace) ---
 
     function Log-Message {
-        param($GuiControls, [string]$Message, [System.Drawing.Color]$Color = 'Black')
+        param($GuiControls, [string]$Message, [System.Drawing.Color]$Color = 'Black', [string]$logFile)
 
+        # Log to the text file first
+        "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message" | Out-File -FilePath $logFile -Append
+
+        # Then, update the GUI
         $logBox = $GuiControls.LogBox
         if ($logBox.InvokeRequired) {
-            $logBox.Invoke([Action[string, System.Drawing.Color]]{
-                param([string]$msg, [System.Drawing.Color]$c)
-                Log-Message -GuiControls $GuiControls -Message $msg -Color $c
-            }, $Message, $Color)
+            $logBox.Invoke([Action[string, System.Drawing.Color, string]]{
+                param([string]$msg, [System.Drawing.Color]$c, [string]$lf)
+                Log-Message -GuiControls $GuiControls -Message $msg -Color $c -logFile $lf
+            }, $Message, $Color, $logFile)
         }
         else {
             $logBox.SelectionStart = $logBox.TextLength
@@ -104,72 +122,73 @@ $ps.AddScript({
     }
 
     function Invoke-LoggedCommand {
-        param($GuiControls, [scriptblock]$Command, [string]$Name)
+        param($GuiControls, [scriptblock]$Command, [string]$Name, [string]$logFile)
         
-        Log-Message -GuiControls $GuiControls -Message "Running: $Name..."
+        Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -logFile $logFile
         $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
 
         if ($LASTEXITCODE -ne 0) {
-            Log-Message -GuiControls $GuiControls -Message "ERROR: '$Name' failed. Exit Code: $LASTEXITCODE" -Color "Red"
-            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" } } }
+            Log-Message -GuiControls $GuiControls -Message "ERROR: '$Name' failed. Exit Code: $LASTEXITCODE" -Color "Red" -logFile $logFile
+            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -logFile $logFile } } }
         } else {
-            Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green"
-            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" } } }
+            Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -logFile $logFile
+            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -logFile $logFile } } }
         }
     }
 
     function Check-HardwareUpdates {
-        param ($GuiControls)
+        param ($GuiControls, [string]$logFile)
         
         $manufacturer = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
-        Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer"
+        Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer" -logFile $logFile
 
         if ($manufacturer -like "*Dell*") {
             if (Test-Path $config.DellUpdateCLI) {
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $config.DellUpdateCLI /scan }
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $config.DellUpdateCLI /applyUpdates -reboot=enable }
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $config.DellUpdateCLI /scan } -logFile $logFile
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $config.DellUpdateCLI /applyUpdates -reboot=enable } -logFile $logFile
             } else {
-                Log-Message -GuiControls $GuiControls -Message "Dell Command | Update not found. Please install it manually." -Color "Orange"
+                Log-Message -GuiControls $GuiControls -Message "Dell Command | Update not found. Please install it manually." -Color "Orange" -logFile $logFile
             }
         }
         elseif ($manufacturer -like "*HP*") {
             if (Test-Path $config.HPImageAssistant) {
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $config.HPImageAssistant /Operation:Analyze /Action:Install /Silent }
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $config.HPImageAssistant /Operation:Analyze /Action:Install /Silent } -logFile $logFile
             } else {
-                Log-Message -GuiControls $GuiControls -Message "HP Image Assistant not found. Please install it manually." -Color "Orange"
+                Log-Message -GuiControls $GuiControls -Message "HP Image Assistant not found. Please install it manually." -Color "Orange" -logFile $logFile
             }
         }
         else {
-            Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange"
+            Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange" -logFile $logFile
         }
     }
 
     function Start-Maintenance {
-        param($GuiControls)
+        param($GuiControls, [string]$logFile)
 
-        Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green"
+        Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -logFile $logFile
+        Log-Message -GuiControls $GuiControls -Message "Log file for this session is located at: $logFile" -Color "DarkBlue" -logFile $logFile
         
         $GuiControls.ProgressBar.Maximum = $maintenanceCommands.Count + 1
 
         foreach ($item in $maintenanceCommands) {
-            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name
-            if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" }
+            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -logFile $logFile
+            if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -logFile $logFile }
             $GuiControls.ProgressBar.Value++
         }
 
-        Check-HardwareUpdates -GuiControls $GuiControls
+        Check-HardwareUpdates -GuiControls $GuiControls -logFile $logFile
         $GuiControls.ProgressBar.Value++
 
-        Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer..." -Color "DarkBlue"
+        Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer..." -Color "DarkBlue" -logFile $logFile
         Start-Sleep -Seconds 5
         Restart-Computer -Force
     }
 
     # --- SCRIPT EXECUTION (Inside the runspace) ---
     # Now that the functions are defined, call the main one.
-    Start-Maintenance -GuiControls $GuiControls
+    Start-Maintenance -GuiControls $GuiControls -logFile $logFile
 
-}).AddArgument($gui).AddArgument($maintenanceCommands).AddArgument($config) | Out-Null
+}).AddArgument($gui).AddArgument($maintenanceCommands).AddArgument($config).AddArgument($logFile) | Out-Null # Pass the $logFile path into the runspace
 
 # Start the background task. This call returns immediately.
 $handle = $ps.BeginInvoke()

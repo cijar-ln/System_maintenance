@@ -52,22 +52,19 @@ $mainForm.WindowState = 'Maximized'
 # Create a text label for the log box.
 $label = New-Object System.Windows.Forms.Label
 $label.Text = "Status Log:"
-$label.Location = New-Object System.Drawing.Point(10, 10)
-$label.Anchor = 'Top, Left, Right' # Stretches horizontally at the top
+$label.Dock = 'Top' # Stick to the top edge
 
 # Create the main text box where all status messages and logs will be displayed.
 $logBox = New-Object System.Windows.Forms.RichTextBox
-$logBox.Location = New-Object System.Drawing.Point(10, 30)
 $logBox.Font = "Consolas, 10"
 $logBox.ReadOnly = $true
 $logBox.ScrollBars = "Vertical"
-$logBox.Anchor = 'Top, Bottom, Left, Right' # Stretches in all directions to fill space
+$logBox.Dock = 'Fill' # Fill all remaining space
 
 # Create a progress bar to give the user a visual indication of the script's progress.
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(10, 415)
 $progressBar.Style = "Continuous"
-$progressBar.Anchor = 'Bottom, Left, Right' # Stretches horizontally at the bottom
+$progressBar.Dock = 'Bottom' # Stick to the bottom edge
 
 
 # VERBOSE: Now, add all the created controls to the main form's collection of controls.
@@ -112,12 +109,12 @@ function Start-Maintenance {
 
     # 2. Define Commands
     $commands = @(
-        [pscustomobject]@{ Name = "Flushing DNS Cache";              Command = { ipconfig /flushdns } },
-        [pscustomobject]@{ Name = "Forcing Group Policy Update";     Command = { gpupdate /force } },
+        [pscustomobject]@{ Name = "Flushing DNS Cache";               Command = { ipconfig /flushdns } },
+        [pscustomobject]@{ Name = "Forcing Group Policy Update";      Command = { gpupdate /force } },
         [pscustomobject]@{ Name = "Restarting Windows Explorer";      Command = { Stop-Process -Name explorer -Force; Start-Process explorer.exe } },
-        [pscustomobject]@{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } },
-        [pscustomobject]@{ Name = "Resetting Winsock Catalog";       Command = { netsh winsock reset } },
-        [pscustomobject]@{ Name = "Resetting TCP/IP Stack";          Command = { netsh int ip reset } },
+        [pscustomobject]@{ Name = "Checking for Windows Updates";     Command = { wuauclt /detectnow; wuauclt /reportnow } },
+        [pscustomobject]@{ Name = "Resetting Winsock Catalog";        Command = { netsh winsock reset } },
+        [pscustomobject]@{ Name = "Resetting TCP/IP Stack";           Command = { netsh int ip reset } },
         [pscustomobject]@{ Name = "Checking System File Integrity (SFC)"; Command = { sfc /scannow } },
         [pscustomobject]@{ Name = "Checking Component Store Health (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
         [pscustomobject]@{ Name = "Restoring Component Store (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth } },

@@ -48,6 +48,7 @@ $mainForm.Size = New-Object System.Drawing.Size(600, 500)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = 'FixedSingle'
 $mainForm.MaximizeBox = $false
+$mainForm.WindowState = 'Maximized'
 
 # Create a text label for the log box.
 $label = New-Object System.Windows.Forms.Label
@@ -113,13 +114,7 @@ function Start-Maintenance {
     $commands = @(
         [pscustomobject]@{ Name = "Flushing DNS Cache";              Command = { ipconfig /flushdns } },
         [pscustomobject]@{ Name = "Forcing Group Policy Update";     Command = { gpupdate /force } },
-        [pscustomobject]@{ Name = "Restarting Windows Explorer";      Command = { 
-    Stop-Process -Name explorer -Force; 
-    Start-Process explorer; 
-    Start-Sleep -Milliseconds 250;
-    $mainForm.TopMost = $true; 
-    $mainForm.TopMost = $false 
-} },
+        [pscustomobject]@{ Name = "Restarting Windows Explorer";      Command = { Stop-Process -Name explorer -Force; Start-Process explorer.exe} },
         [pscustomobject]@{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } },
         [pscustomobject]@{ Name = "Resetting Winsock Catalog";       Command = { netsh winsock reset } },
         [pscustomobject]@{ Name = "Resetting TCP/IP Stack";          Command = { netsh int ip reset } },

@@ -45,9 +45,8 @@ Add-Type -AssemblyName System.Drawing
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "System Maintenance Tool"
 $mainForm.StartPosition = "CenterScreen"
-$mainForm.FormBorderStyle = 'Sizable'
-$mainForm.MaximizeBox = $true
-$mainForm.WindowState = 'Maximized'
+$mainForm.FormBorderStyle = 'FixedSingle'
+$mainForm.MaximizeBox = $false
 
 # Create a text label for the log box.
 $label = New-Object System.Windows.Forms.Label

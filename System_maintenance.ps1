@@ -53,6 +53,7 @@ $mainForm.WindowState = 'Maximized'
 $label = New-Object System.Windows.Forms.Label
 $label.Text = "Status Log:"
 $label.Dock = 'Top' # Stick to the top edge
+$label.Height = 20 # Give the label a fixed height
 
 # Create the main text box where all status messages and logs will be displayed.
 $logBox = New-Object System.Windows.Forms.RichTextBox

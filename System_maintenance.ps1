@@ -44,16 +44,17 @@ Add-Type -AssemblyName System.Drawing
 # Create the main window (the form). This is the container for all other controls.
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "System Maintenance Tool"
-$mainForm.Size = New-Object System.Drawing.Size(600, 500)
 $mainForm.StartPosition = "CenterScreen"
-$mainForm.FormBorderStyle = 'FixedSingle'
-$mainForm.MaximizeBox = $false
+$mainForm.FormBorderStyle = 'Sizable'
+$mainForm.MaximizeBox = $true
+$mainForm.WindowState = 'Maximized'
 
 # Create a text label for the log box.
 $label = New-Object System.Windows.Forms.Label
 $label.Text = "Status Log:"
 $label.Location = New-Object System.Drawing.Point(10, 10)
 $label.Size = New-Object System.Drawing.Size(560, 20)
+$label.Anchor = 'Top, Left, Right' # Stretches horizontally at the top
 
 # Create the main text box where all status messages and logs will be displayed.
 $logBox = New-Object System.Windows.Forms.RichTextBox
@@ -62,12 +63,15 @@ $logBox.Size = New-Object System.Drawing.Size(565, 370)
 $logBox.Font = "Consolas, 10"
 $logBox.ReadOnly = $true
 $logBox.ScrollBars = "Vertical"
+$logBox.Anchor = 'Top, Bottom, Left, Right' # Stretches in all directions to fill space
 
 # Create a progress bar to give the user a visual indication of the script's progress.
 $progressBar = New-Object System.Windows.Forms.ProgressBar
 $progressBar.Location = New-Object System.Drawing.Point(10, 415)
 $progressBar.Size = New-Object System.Drawing.Size(565, 25)
 $progressBar.Style = "Continuous"
+$progressBar.Anchor = 'Bottom, Left, Right' # Stretches horizontally at the bottom
+
 
 # VERBOSE: Now, add all the created controls to the main form's collection of controls.
 $mainForm.Controls.Add($label)

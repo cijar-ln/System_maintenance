@@ -100,6 +100,9 @@ function Log-Message {
 
 # VERBOSE: This function contains the primary maintenance tasks. It will only be called if the script is running as an administrator.
 function Start-Maintenance {
+    # Moved this message here to solve the timing issue
+    Log-Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green"
+
     # 1. Initial Warning in GUI Log
     Log-Message "Starting System Maintenance..." -Color "DarkBlue"
     Log-Message "*****************************************************" -Color "Red"
@@ -318,10 +321,7 @@ This tool will now close.
 }
 else {
     # --- ADMIN WORKFLOW ---
-    Log-Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green"
-    # Force the UI to draw the message above before continuing
-    [System.Windows.Forms.Application]::DoEvents()
-    
+    # Call the main function. All logging is now handled inside it.
     Start-Maintenance
 }
 

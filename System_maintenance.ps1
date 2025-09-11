@@ -319,9 +319,14 @@ This tool will now close.
     $mainForm.Close()
     exit
 }
-else {
-    # --- ADMIN WORKFLOW ---
-    # Call the main function. All logging is now handled inside it.
+else {    # --- ADMIN WORKFLOW ---
+    # Log the confirmation message *before* starting the heavy work.
+    Log-Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green"
+    
+    # Force the GUI to process events and update itself NOW.
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # Now, call the main function.
     Start-Maintenance
 }
 

@@ -9,7 +9,7 @@ param (
     elevation via Company Portal, runs a full suite of system/network repairs, automates Windows Updates,
     and manages manufacturer-specific driver and firmware updates, including silent installations.
 
-.DESCRIPTION:
+.DESCRIPTION
 
     This script provides a user-friendly graphical interface (GUI) to guide a user or technician through a comprehensive,
     standardized system health and repair process. Its operational flow is as follows:

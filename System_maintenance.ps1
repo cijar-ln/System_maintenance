@@ -2,7 +2,6 @@ param (
     [switch]$Help
 )
 
-# Your comment-based help block would still be here for the .ps1 file
 <#
 .SYNOPSIS
 
@@ -10,6 +9,48 @@ param (
     elevation via Company Portal, runs a full suite of system/network repairs, automates Windows Updates,
     and manages manufacturer-specific driver and firmware updates, including silent installations.
 
+.DESCRIPTION:
+
+    This script provides a user-friendly graphical interface (GUI) to guide a user or technician through a comprehensive,
+    standardized system health and repair process. Its operational flow is as follows:
+
+    1.  Pre-execution Checks: Before starting, the script performs several critical checks.
+        - It first asks for user confirmation, warning that the process is lengthy and ends with a mandatory restart.
+        - For laptops, it verifies the device is connected to AC power and will repeatedly prompt the user until it is.
+        - It checks if it's running with elevated privileges to determine the next step.
+
+    2.  Administrator Rights Elevation: If the script is not run as an administrator:
+        - It automatically opens the Company Portal to the specific application for temporary admin rights.
+        - It displays clear, step-by-step instructions for the user to install the rights, restart their PC, and then
+          re-run the tool with the newly acquired privileges.
+
+    3.  Background Processing: Once running with admin rights, all maintenance tasks are executed in a background
+        PowerShell session. This ensures the GUI remains responsive, providing real-time progress without freezing.
+
+    4.  Comprehensive Maintenance Sequence: The script executes a carefully ordered sequence of commands:
+        - Network Repair: Flushes the DNS cache and resets the Winsock catalog and TCP/IP stack.
+        - Windows Update Automation: Checks for the 'PSWindowsUpdate' module. If not present, it installs it automatically.
+          It then proceeds to search for, download, and install all applicable Microsoft updates.
+        - System Integrity: Runs DISM commands to check and restore the health of the component store, followed by
+          a System File Checker (SFC) scan to repair corrupted system files.
+        - Disk Health: Schedules a full check disk (`chkdsk`) to run on the next restart.
+
+    5.  Automated Driver & Firmware Updates: The tool intelligently handles manufacturer-specific updates.
+        - It first detects the computer's manufacturer (e.g., Dell, HP).
+        - For Dell Machines: If Dell Command | Update is not found, it automatically downloads the installer,
+          performs a silent installation, and then logs a message for the user to run it manually after the final restart.
+          If it is already installed, it runs a scan and applies updates automatically.
+        - For HP Machines: It checks for HP Image Assistant and runs it if found. If not, it provides a direct link
+          and instructions for the user to install it manually.
+        - For Other Manufacturers: It provides on-screen guidance for common update tools (e.g., Lenovo Vantage).
+
+    6.  Dual Logging System: All actions, command outputs, successes, and errors are logged in two ways:
+        - Real-Time GUI Log: The main window displays a color-coded log of every step as it happens.
+        - Permanent File Log: A timestamped text file is created in 'C:\ProgramData\SystemMaintenance' for each
+          session, allowing for later analysis and record-keeping.
+
+    7.  Final Mandatory Restart: Upon completion of all tasks, the script displays a final message and, after a
+        5-second countdown, performs an automatic restart to ensure all changes are fully applied.
 #>
 
 # This logic checks for the -Help switch
@@ -20,13 +61,11 @@ NAME:
     System Maintenance Tool
 
 SYNOPSIS:
-
     An automated, GUI-based maintenance and repair tool for Windows 11. It handles admin rights
     elevation via Company Portal, runs a full suite of system/network repairs, automates Windows Updates,
     and manages manufacturer-specific driver and firmware updates, including silent installations.
 
 DESCRIPTION:
-
     This script provides a user-friendly graphical interface (GUI) to guide a user or technician through a comprehensive,
     standardized system health and repair process. Its operational flow is as follows:
 

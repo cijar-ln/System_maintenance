@@ -55,30 +55,22 @@ $maintenanceCommands = @(
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
     @{ Name = "Restarting Windows Explorer";    Command = { Stop-Process -Name explorer -Force; Start-Process explorer } },
 
-@{ 
-        Name = "Install/Run PSWindowsUpdate Module"
+@{
+    Name = "Install/Run PSWindowsUpdate Module"
         Command = {
-            try {
-                # Temporarily change the execution policy for this process to allow module installation
-                Set-ExecutionPolicy Bypass -Scope Process -Force
-
-                # Check if the PSWindowsUpdate module is installed, and install it if it is not
+            # Launch a new PowerShell process with the correct execution policy to handle the entire update sequence.
+            # This bypasses potential command recognition issues within the script's background session.
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& {
                 if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
-                    Write-Output "PSWindowsUpdate module not found. Installing now..."
+                    Write-Output 'PSWindowsUpdate module not found. Installing now...'
                     Install-Module -Name PSWindowsUpdate -Force -AcceptLicense -Scope AllUsers
                 } else {
-                    Write-Output "PSWindowsUpdate module is already installed."
+                    Write-Output 'PSWindowsUpdate module is already installed.'
                 }
                 
-                Write-Output "Searching for, downloading, and installing all applicable updates..."
-                # Use the module to install all updates for Windows and other Microsoft products
-                # The script's final reboot will handle any updates that require a restart.
+                Write-Output 'Searching for, downloading, and installing all applicable updates...'
                 Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose
-            }
-            catch {
-                # If anything fails, write a detailed error to the log
-                Write-Error "A critical error occurred during the Windows Update process: $_"
-            }
+            }"
         }
     },
 

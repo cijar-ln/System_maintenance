@@ -1,12 +1,51 @@
 <#
 .SYNOPSIS
-    A verbose, GUI-based tool that runs a comprehensive suite of Windows 11 maintenance tasks.
-    It intelligently guides non-admin users to gain elevation via Company Portal and automates manufacturer-specific
-    driver and firmware updates, including installer downloads.
-.DESCRIPTION
-    (Description remains unchanged)
-#>
+    An automated, GUI-based maintenance and repair tool for Windows 11. It handles admin rights
+    elevation via Company Portal, runs a full suite of system/network repairs, automates Windows Updates,
+    and manages manufacturer-specific driver and firmware updates, including silent installations.
 
+.DESCRIPTION
+    This script provides a user-friendly graphical interface (GUI) to guide a user or technician through a comprehensive,
+    standardized system health and repair process. Its operational flow is as follows:
+
+    1.  Pre-execution Checks: Before starting, the script performs several critical checks.
+        - It first asks for user confirmation, warning that the process is lengthy and ends with a mandatory restart.
+        - For laptops, it verifies the device is connected to AC power and will repeatedly prompt the user until it is.
+        - It checks if it's running with elevated privileges to determine the next step.
+
+    2.  Administrator Rights Elevation: If the script is not run as an administrator:
+        - It automatically opens the Company Portal to the specific application for temporary admin rights.
+        - It displays clear, step-by-step instructions for the user to install the rights, restart their PC, and then
+          re-run the tool with the newly acquired privileges.
+
+    3.  Background Processing: Once running with admin rights, all maintenance tasks are executed in a background
+        PowerShell session. This ensures the GUI remains responsive, providing real-time progress without freezing.
+
+    4.  Comprehensive Maintenance Sequence: The script executes a carefully ordered sequence of commands:
+        - Network Repair: Flushes the DNS cache and resets the Winsock catalog and TCP/IP stack.
+        - Windows Update Automation: Checks for the 'PSWindowsUpdate' module. If not present, it installs it automatically.
+          It then proceeds to search for, download, and install all applicable Microsoft updates.
+        - System Integrity: Runs DISM commands to check and restore the health of the component store, followed by
+          a System File Checker (SFC) scan to repair corrupted system files.
+        - Disk Health: Schedules a full check disk (`chkdsk`) to run on the next restart.
+
+    5.  Automated Driver & Firmware Updates: The tool intelligently handles manufacturer-specific updates.
+        - It first detects the computer's manufacturer (e.g., Dell, HP).
+        - For Dell Machines: If Dell Command | Update is not found, it automatically downloads the installer,
+          performs a silent installation, and then logs a message for the user to run it manually after the final restart.
+          If it is already installed, it runs a scan and applies updates automatically.
+        - For HP Machines: It checks for HP Image Assistant and runs it if found. If not, it provides a direct link
+          and instructions for the user to install it manually.
+        - For Other Manufacturers: It provides on-screen guidance for common update tools (e.g., Lenovo Vantage).
+
+    6.  Dual Logging System: All actions, command outputs, successes, and errors are logged in two ways:
+        - Real-Time GUI Log: The main window displays a color-coded log of every step as it happens.
+        - Permanent File Log: A timestamped text file is created in 'C:\ProgramData\SystemMaintenance' for each
+          session, allowing for later analysis and record-keeping.
+
+    7.  Final Mandatory Restart: Upon completion of all tasks, the script displays a final message and, after a
+        5-second countdown, performs an automatic restart to ensure all changes are fully applied.
+#>
 #region --- Configuration ---
 
 $config = @{
@@ -19,7 +58,6 @@ $config = @{
 }
 
 # Define the sequence of maintenance commands to be executed.
-# REFACTOR: Converted the PSWindowsUpdate command to a here-string for readability and added a try/catch.
 $maintenanceCommands = @(
     @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
@@ -34,7 +72,7 @@ $maintenanceCommands = @(
                         Install-Module -Name PSWindowsUpdate -Force -AcceptLicense -Scope AllUsers -ErrorAction Stop
                     } catch {
                         Write-Error "Failed to install PSWindowsUpdate module. Please check internet connectivity. `n$($_.Exception.Message)"
-                        return # Exit this specific command block on failure
+                        return 
                     }
                 } else {
                     Write-Output 'PSWindowsUpdate module is already installed.'
@@ -72,7 +110,7 @@ function Show-MessageBox {
 function Initialize-GUI {
     [CmdletBinding()]
     param()
-    Add-Type -AssemblyName System.Drawing, System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
 
     $form = New-Object System.Windows.Forms.Form -Property @{
         Text          = "System Maintenance Tool"
@@ -85,7 +123,6 @@ function Initialize-GUI {
     $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Bottom" }
     $form.Controls.AddRange(@($logBox, $label, $progressBar))
 
-    # Return a custom object containing the GUI controls.
     return [PSCustomObject]@{
         Form        = $form
         LogBox      = $logBox
@@ -95,136 +132,9 @@ function Initialize-GUI {
 
 #endregion
 
-#region --- Core Maintenance Logic ---
-# REFACTOR: All logic functions are now in the main script scope for better organization and readability.
-
-function Log-Message {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] $GuiControls,
-        [Parameter(Mandatory)] [string]$Message,
-        [System.Drawing.Color]$Color = 'Black',
-        [Parameter(Mandatory)] [string]$LogFile
-    )
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message" | Out-File -FilePath $LogFile -Append
-
-    $logBox = $GuiControls.LogBox
-    if ($logBox.InvokeRequired) {
-        $logBox.Invoke([Action[string, System.Drawing.Color]]{
-            param([string]$msg, [System.Drawing.Color]$c)
-            # Recursively call this function on the GUI's thread.
-            # No need to pass $GuiControls or $LogFile again in the Invoke payload.
-            Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile
-        }, $Message, $Color)
-    }
-    else {
-        $logBox.SelectionStart = $logBox.TextLength
-        $logBox.SelectionLength = 0
-        $logBox.SelectionColor = $Color
-        $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
-        $logBox.ScrollToCaret()
-    }
-}
-
-function Invoke-LoggedCommand {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] $GuiControls,
-        [Parameter(Mandatory)] [scriptblock]$Command,
-        [Parameter(Mandatory)] [string]$Name,
-        [Parameter(Mandatory)] [string]$LogFile
-    )
-    Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile
-    
-    $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
-
-    if ($LASTEXITCODE -ne 0) {
-        Log-Message -GuiControls $GuiControls -Message "ERROR: '$Name' failed. Exit Code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile
-        if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile } } }
-    } else {
-        Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile
-        if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile } } }
-    }
-}
-
-function Check-HardwareUpdates {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)] $GuiControls,
-        [Parameter(Mandatory)] $Config,
-        [Parameter(Mandatory)] [string]$LogFile
-    )
-    $manufacturer = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
-    Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer" -LogFile $LogFile
-
-    if ($manufacturer -like "*Dell*") {
-        Log-Message -GuiControls $GuiControls -Message "Dell system detected. Searching for Dell Command | Update..." -Color "Blue" -LogFile $LogFile
-        if (Test-Path $Config.DellUpdateCLI) {
-            Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $Config.DellUpdateCLI /scan } -LogFile $LogFile
-            Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=enable } -LogFile $LogFile
-        } else {
-            Log-Message -GuiControls $GuiControls -Message "NOTE: Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile
-            try {
-                $tempPath = Join-Path $env:TEMP "DCU_Installer.exe"
-                Log-Message -GuiControls $GuiControls -Message "Downloading the installer from $($Config.DellInstallerUrl)..." -LogFile $LogFile
-                Invoke-WebRequest -Uri $Config.DellInstallerUrl -OutFile $tempPath -ErrorAction Stop
-                Log-Message -GuiControls $GuiControls -Message "Download complete." -Color "Green" -LogFile $LogFile
-
-                Log-Message -GuiControls $GuiControls -Message "Starting silent installation..." -LogFile $LogFile
-                Start-Process -FilePath $tempPath -ArgumentList "/s" -Wait -ErrorAction Stop
-                Log-Message -GuiControls $GuiControls -Message "Installation complete." -Color "Green" -LogFile $LogFile
-                
-                Remove-Item -Path $tempPath -Force
-                Log-Message -GuiControls $GuiControls -Message "ACTION REQUIRED: Dell Command | Update has been installed. Please open it from the Start Menu after the restart to check for updates manually." -Color "Orange" -LogFile $LogFile
-            }
-            catch {
-                Log-Message -GuiControls $GuiControls -Message "ERROR: Failed to automatically install Dell Command | Update. $_" -Color "Red" -LogFile $LogFile
-            }
-        }
-    }
-    elseif ($manufacturer -like "*HP*") {
-        Log-Message -GuiControls $GuiControls -Message "HP system detected. Searching for HP Image Assistant..." -Color "Blue" -LogFile $LogFile
-        if (Test-Path $Config.HPImageAssistant) {
-            Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $Config.HPImageAssistant /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
-        } else {
-            Log-Message -GuiControls $GuiControls -Message "NOTE: HP Image Assistant not installed. Please download it from: https://support.hp.com/us-en/help/hp-support-assistant" -Color "Orange" -LogFile $LogFile
-        }
-    }
-    else {
-        Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange" -LogFile $LogFile
-    }
-}
-
-function Start-MaintenanceSequence {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] $GuiControls,
-        [Parameter(Mandatory)] $LogFile,
-        [Parameter(Mandatory)] $MaintenanceCommands,
-        [Parameter(Mandatory)] $Config
-    )
-    Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -LogFile $LogFile
-    Log-Message -GuiControls $GuiControls -Message "Log file for this session is located at: $LogFile" -Color "DarkBlue" -LogFile $LogFile
-    
-    $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
-
-    foreach ($item in $MaintenanceCommands) {
-        Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile
-        if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile }
-        $GuiControls.ProgressBar.Value++
-    }
-
-    Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
-    $GuiControls.ProgressBar.Value++
-
-    Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 5 seconds..." -Color "DarkBlue" -LogFile $LogFile
-    Start-Sleep -Seconds 5
-    Restart-Computer -Force
-}
-
-#endregion
-
 #region --- Script Entry Point ---
+
+Add-Type -AssemblyName System.Windows.Forms
 
 # Check for AC Power connection on laptops
 $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
@@ -252,13 +162,22 @@ if (-not $isAdmin) {
         Start-Process $config.CompanyPortalAppUri -ErrorAction Stop
 
         $instructions = @"
+
+
 ACTION REQUIRED:
-The Company Portal app has been opened.
-1. Find and click 'Install' for the admin rights application. If it says "Reinstall" or "Uninstall", close the Company Portal and re-run this tool as an Administrator.
-2. WAIT for the installation to complete.
-3. Once 'Installed', MANUALLY RESTART your computer.
-4. After restarting, run this script again as an administrator.
+
+The Company Portal app has been opened for you.
+
+1. Please find and click the 'Install' button for the admin rights application. If it says "Reinstall" or "Uninstall", just close the Company Portal and re-run the Maintenance Tool as an Administrator.
+
+2. WAIT for the installation to fully complete.
+
+3. Once it shows 'Installed', MANUALLY RESTART your computer.
+
+4. After restarting, please run this script again as an administrator.
+
 This tool will now close.
+
 "@
         Show-MessageBox -Text $instructions -Title "Manual Steps Required" -Icon 'Information'
     }
@@ -282,7 +201,6 @@ if (-not (Test-Path -Path $config.LogDirectory)) {
 # Initialize GUI and prepare for background job
 $gui = Initialize-GUI
 
-# REFACTOR: Pass all required variables to the runspace in a single, clean parameter object.
 $scriptParameters = @{
     GuiControls         = $gui
     LogFile             = $config.LogFile
@@ -290,8 +208,8 @@ $scriptParameters = @{
     Config              = $config
 }
 
+# FIX: All necessary functions are now defined INSIDE the script block for the background job.
 $ps = [powershell]::Create().AddScript({
-    # This entire script block now just unpacks parameters and calls the main function.
     param($params)
     
     # Unpack parameters inside the runspace
@@ -299,15 +217,132 @@ $ps = [powershell]::Create().AddScript({
     $logFile             = $params.LogFile
     $maintenanceCommands = $params.MaintenanceCommands
     $config              = $params.Config
-    
-    # Call the main sequence function, which now lives in the global scope.
+
+    # --- CORE FUNCTIONS (Copied inside the runspace) ---
+    function Log-Message {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)] $GuiControls,
+            [Parameter(Mandatory)] [string]$Message,
+            [System.Drawing.Color]$Color = 'Black',
+            [Parameter(Mandatory)] [string]$LogFile
+        )
+        "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message" | Out-File -FilePath $LogFile -Append
+
+        $logBox = $GuiControls.LogBox
+        if ($logBox.InvokeRequired) {
+            $logBox.Invoke([Action[string, System.Drawing.Color]] {
+                param([string]$msg, [System.Drawing.Color]$c)
+                Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile
+            }, $Message, $Color)
+        }
+        else {
+            $logBox.SelectionStart = $logBox.TextLength
+            $logBox.SelectionLength = 0
+            $logBox.SelectionColor = $Color
+            $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
+            $logBox.ScrollToCaret()
+        }
+    }
+
+    function Invoke-LoggedCommand {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)] $GuiControls,
+            [Parameter(Mandatory)] [scriptblock]$Command,
+            [Parameter(Mandatory)] [string]$Name,
+            [Parameter(Mandatory)] [string]$LogFile
+        )
+        Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile
+        
+        $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
+
+        if ($LASTEXITCODE -ne 0) {
+            Log-Message -GuiControls $GuiControls -Message "ERROR: '$Name' failed. Exit Code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile
+            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile } } }
+        } else {
+            Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile
+            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile } } }
+        }
+    }
+
+    function Check-HardwareUpdates {
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory)] $GuiControls,
+            [Parameter(Mandatory)] $Config,
+            [Parameter(Mandatory)] [string]$LogFile
+        )
+        $manufacturer = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
+        Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer" -LogFile $LogFile
+
+        if ($manufacturer -like "*Dell*") {
+            Log-Message -GuiControls $GuiControls -Message "Dell system detected..." -Color "Blue" -LogFile $LogFile
+            if (Test-Path $Config.DellUpdateCLI) {
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $Config.DellUpdateCLI /scan } -LogFile $LogFile
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=enable } -LogFile $LogFile
+            } else {
+                Log-Message -GuiControls $GuiControls -Message "NOTE: Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile
+                try {
+                    $tempPath = Join-Path $env:TEMP "DCU_Installer.exe"
+                    Invoke-WebRequest -Uri $Config.DellInstallerUrl -OutFile $tempPath -ErrorAction Stop
+                    Start-Process -FilePath $tempPath -ArgumentList "/s" -Wait -ErrorAction Stop
+                    Remove-Item -Path $tempPath -Force
+                    Log-Message -GuiControls $GuiControls -Message "ACTION REQUIRED: Dell Command | Update installed. Please run it manually after restart." -Color "Orange" -LogFile $LogFile
+                }
+                catch {
+                    Log-Message -GuiControls $GuiControls -Message "ERROR: Failed to install Dell Command | Update. $_" -Color "Red" -LogFile $LogFile
+                }
+            }
+        }
+        elseif ($manufacturer -like "*HP*") {
+            Log-Message -GuiControls $GuiControls -Message "HP system detected..." -Color "Blue" -LogFile $LogFile
+            if (Test-Path $Config.HPImageAssistant) {
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $Config.HPImageAssistant /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
+            } else {
+                Log-Message -GuiControls $GuiControls -Message "NOTE: HP Image Assistant not installed. Please download from: https://support.hp.com/us-en/help/hp-support-assistant" -Color "Orange" -LogFile $LogFile
+            }
+        }
+        else {
+            Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange" -LogFile $LogFile
+        }
+    }
+
+    function Start-MaintenanceSequence {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)] $GuiControls,
+            [Parameter(Mandatory)] $LogFile,
+            [Parameter(Mandatory)] $MaintenanceCommands,
+            [Parameter(Mandatory)] $Config
+        )
+        Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -LogFile $LogFile
+        Log-Message -GuiControls $GuiControls -Message "Log file for this session is: $LogFile" -Color "DarkBlue" -LogFile $LogFile
+        
+        $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
+
+        foreach ($item in $MaintenanceCommands) {
+            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile
+            if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile }
+            $GuiControls.ProgressBar.Value++
+        }
+
+        Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
+        $GuiControls.ProgressBar.Value++
+
+        Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 5 seconds..." -Color "DarkBlue" -LogFile $LogFile
+        Start-Sleep -Seconds 5
+        Restart-Computer -Force
+    }
+
+    # --- SCRIPT EXECUTION (Inside the runspace) ---
     Start-MaintenanceSequence -GuiControls $guiControls -LogFile $logFile -MaintenanceCommands $maintenanceCommands -Config $config
 
-}).AddArgument($scriptParameters) # Pass the single hashtable as an argument.
+}).AddArgument($scriptParameters)
 
 # Start the background task and show the form
 $handle = $ps.BeginInvoke()
-$gui.Form.ShowDialog() | Out-Null # Pipe to Out-Null to suppress dialog result output
+$gui.Form.ShowDialog() | Out-Null
 
 # Cleanup
 $ps.EndInvoke($handle)

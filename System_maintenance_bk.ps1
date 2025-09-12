@@ -54,7 +54,34 @@ $maintenanceCommands = @(
     @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
     @{ Name = "Restarting Windows Explorer";    Command = { Stop-Process -Name explorer -Force; Start-Process explorer } },
-    @{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } }, # NOTE: wuauclt is deprecated but kept for legacy compatibility.
+
+@{ 
+        Name = "Install/Run PSWindowsUpdate Module"
+        Command = {
+            try {
+                # Temporarily change the execution policy for this process to allow module installation
+                Set-ExecutionPolicy Bypass -Scope Process -Force
+
+                # Check if the PSWindowsUpdate module is installed, and install it if it is not
+                if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+                    Write-Output "PSWindowsUpdate module not found. Installing now..."
+                    Install-Module -Name PSWindowsUpdate -Force -AcceptLicense -Scope AllUsers
+                } else {
+                    Write-Output "PSWindowsUpdate module is already installed."
+                }
+                
+                Write-Output "Searching for, downloading, and installing all applicable updates..."
+                # Use the module to install all updates for Windows and other Microsoft products
+                # The script's final reboot will handle any updates that require a restart.
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose
+            }
+            catch {
+                # If anything fails, write a detailed error to the log
+                Write-Error "A critical error occurred during the Windows Update process: $_"
+            }
+        }
+    },
+
     @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
     @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
@@ -96,6 +123,27 @@ function Initialize-GUI {
 #region --- Script Entry Point ---
 
 Add-Type -AssemblyName System.Windows.Forms
+
+# Check if the machine has a battery (i.e., is a laptop). This will be $null on a desktop.
+$battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
+
+if ($battery) {
+    # If a battery exists, loop continuously as long as it's discharging (Status '1').
+    while ((Get-CimInstance -ClassName Win32_Battery).BatteryStatus -eq 1) {
+        $promptResult = [System.Windows.Forms.MessageBox]::Show(
+            "This maintenance script requires a constant power source. Please connect your laptop to AC power to continue.",
+            "Power Connection Required",
+            [System.Windows.Forms.MessageBoxButtons]::OKCancel,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        # If the user clicks 'Cancel', exit the script immediately.
+        if ($promptResult -eq 'Cancel') {
+            exit
+        }
+    }
+}
+# --- End of Power Connection Check ---
 
 $confirmationResult = [System.Windows.Forms.MessageBox]::Show(
     "This tool will perform lengthy system maintenance and will restart your computer. Save all work and close all apps before proceeding.`n`nDo you want to continue?",

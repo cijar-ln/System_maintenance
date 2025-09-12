@@ -41,7 +41,6 @@
 
 #region --- Configuration ---
 
-# CLEANUP: Centralized all configurable strings into one place for easier maintenance.
 $config = @{
     LogDirectory        = Join-Path -Path $env:ProgramData -ChildPath "SystemMaintenance" # Use a standard location for logs.
     DellUpdateCLI       = "C:\Program Files\Dell\CommandUpdate\dcu-cli.exe"
@@ -55,7 +54,6 @@ $maintenanceCommands = @(
     @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
     @{ Name = "Restarting Windows Explorer";    Command = { Stop-Process -Name explorer -Force; Start-Process explorer } },
-    # CLEANUP: Added a comment noting that wuauclt is a legacy command.
     @{ Name = "Checking for Windows Updates";    Command = { wuauclt /detectnow; wuauclt /reportnow } }, # NOTE: wuauclt is deprecated but kept for legacy compatibility.
     @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
     @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
@@ -70,7 +68,6 @@ $maintenanceCommands = @(
 #region --- GUI Functions ---
 
 function Initialize-GUI {
-    # CLEANUP: Added CmdletBinding as a standard best practice for functions.
     [CmdletBinding()]
     param()
 
@@ -100,7 +97,6 @@ function Initialize-GUI {
 
 Add-Type -AssemblyName System.Windows.Forms
 
-# CLEANUP: The MessageBox call is kept on a single line as it's a .NET method that doesn't support PowerShell splatting.
 $confirmationResult = [System.Windows.Forms.MessageBox]::Show(
     "This tool will perform lengthy system maintenance and will restart your computer. Save all work and close all apps before proceeding.`n`nDo you want to continue?",
     "Confirmation Required",
@@ -115,7 +111,6 @@ if ($confirmationResult -ne 'Yes') { exit }
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     try {
-        # CLEANUP: Removed hardcoded URI and used the one from the $config hashtable for consistency.
         [System.Windows.Forms.MessageBox]::Show("This script requires administrator rights. We will now open the Company Portal so you can install them.", "Administrator Required", "OK", "Information")
         Start-Process $config.CompanyPortalAppUri
 
@@ -143,7 +138,6 @@ This tool will now close.
 }
 
 # --- Create Logging Directory and Define Log File Path ---
-# CLEANUP: Using the log directory path defined in the $config hashtable.
 if (-not (Test-Path -Path $config.LogDirectory)) {
     try {
         New-Item -Path $config.LogDirectory -ItemType Directory -Force -ErrorAction Stop | Out-Null
@@ -234,7 +228,6 @@ $null = $ps.AddScript({
             } else {
                 Log-Message -GuiControls $GuiControls -Message "NOTE: Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -logFile $logFile
                 try {
-                    # CLEANUP: Use the URL from the $config hashtable instead of hardcoding it here.
                     $tempPath = Join-Path $env:TEMP "DCU_Installer.exe"
 
                     Log-Message -GuiControls $GuiControls -Message "Downloading the installer from $($config.DellInstallerUrl)..." -logFile $logFile
@@ -306,7 +299,6 @@ $handle = $ps.BeginInvoke()
 # Show the form and wait for it to be closed.
 $gui.Form.ShowDialog()
 
-# Clean up the runspace resources. This is essential to prevent memory leaks.
 $ps.EndInvoke($handle)
 $ps.Dispose()
 

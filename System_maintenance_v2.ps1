@@ -305,8 +305,10 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] [string]$Message,
             [System.Drawing.Color]$Color = 'Black',
             [Parameter(Mandatory)] [string]$LogFile,
-            [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Severity = 'INFO'
+            [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Severity = 'INFO',
+            [switch]$NoGuiOutput
         )
+        # Always log to the file and Event Log.
         $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Severity] - $Message"
         $logEntry | Out-File -FilePath $LogFile -Append
 
@@ -320,19 +322,22 @@ $ps = [powershell]::Create().AddScript({
             Write-EventLog -LogName "Application" -Source $config.EventLogSource -EventId 1000 -EntryType $eventType -Message $Message
         }
 
-        $logBox = $GuiControls.LogBox
-        if ($logBox.InvokeRequired) {
-            $logBox.Invoke([Action[string, System.Drawing.Color, string]] {
-                param([string]$msg, [System.Drawing.Color]$c, [string]$sev)
-                Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile -Severity $sev
-            }, $Message, $Color, $Severity)
-        }
-        else {
-            $logBox.SelectionStart = $logBox.TextLength
-            $logBox.SelectionLength = 0
-            $logBox.SelectionColor = $Color
-            $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') [$Severity] - $Message`n")
-            $logBox.ScrollToCaret()
+        # Only write to the GUI if the -NoGuiOutput switch was NOT used.
+        if (-not $NoGuiOutput) {
+            $logBox = $GuiControls.LogBox
+            if ($logBox.InvokeRequired) {
+                $logBox.Invoke([Action[string, System.Drawing.Color, string]] {
+                    param([string]$msg, [System.Drawing.Color]$c, [string]$sev)
+                    Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile -Severity $sev -NoGuiOutput:$false
+                }, $Message, $Color, $Severity)
+            }
+            else {
+                $logBox.SelectionStart = $logBox.TextLength
+                $logBox.SelectionLength = 0
+                $logBox.SelectionColor = $Color
+                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') [$Severity] - $Message`n")
+                $logBox.ScrollToCaret()
+            }
         }
     }
 
@@ -345,32 +350,37 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] [string]$LogFile,
             [array]$SuccessCodes
         )
+        # This main status message WILL appear in the GUI.
         Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile -Severity 'INFO'
         
         try {
             $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
 
             if ($LASTEXITCODE -eq 0) {
-                # Green Light: Perfect success
+                # This main status message WILL appear in the GUI.
                 Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile -Severity 'INFO'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
+                # The detailed output lines will NOT appear in the GUI.
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' -NoGuiOutput } } }
             }
             elseif ($SuccessCodes -and $LASTEXITCODE -in $SuccessCodes) {
-                # Yellow Light: Success with a special condition (e.g., reboot required)
+                # This main status message WILL appear in the GUI.
                 $warnMsg = "Task '$Name' completed with a special status. This is not an error. It often means repairs were made and a restart is required to finalize them."
                 Log-Message -GuiControls $GuiControls -Message $warnMsg -Color "Orange" -LogFile $LogFile -Severity 'WARN'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
+                # The detailed output lines will NOT appear in the GUI.
+                if ($output) { $output | For-EachObject { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' -NoGuiOutput } } }
             }
             else {
-                # Red Light: A genuine error
+                # This main status message WILL appear in the GUI.
                 Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
+                # The detailed output lines will NOT appear in the GUI.
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' -NoGuiOutput } } }
             }
         }
         catch {
-            # Critical failure from PowerShell itself
+            # This main status message WILL appear in the GUI.
             Log-Message -GuiControls $GuiControls -Message "A critical error occurred while running '$Name'." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-            $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } }
+            # The detailed error lines will NOT appear in the GUI.
+            $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' -NoGuiOutput } }
         }
     }
 

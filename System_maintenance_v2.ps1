@@ -153,8 +153,8 @@ $maintenanceCommands = @(
             powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $updateCommand
         }
     },
-    @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
-    @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
+    @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset }; SuccessCodes = @(1) },
+    @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset }; SuccessCodes = @(1) },
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
     @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth }; SuccessCodes = @(3010) },
     @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow }; SuccessCodes = @(3010) },

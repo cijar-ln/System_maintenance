@@ -153,7 +153,7 @@ $maintenanceCommands = @(
                 }
                 
                 Write-Output 'Searching for, downloading, and installing all applicable updates...'
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose -NoReboot
 "@
             powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $updateCommand
         }
@@ -203,8 +203,6 @@ function Initialize-GUI {
     
     $bottomPanel.Controls.AddRange(@($progressBar, $cancelButton))
     $form.Controls.AddRange(@($logBox, $label, $bottomPanel))
-
-    $form.add_Resize({ $progressBar.Width = $form.ClientRectangle.Width - 120 })
 
     return [PSCustomObject]@{
         Form         = $form
@@ -301,7 +299,7 @@ $gui.CancelButton.add_Click({
     $gui.CancelButton.Text = "Cancelling..."
     $gui.CancelButton.Enabled = $false
     $cancellationState.CancelRequested = $true
-    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current long task is finished. This may take several minutes. You can technically work in other tasks in the meantime but is strongly not recommended."
+    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current long task is finished. This may take several minutes. You can technically work in other tasks in the meantime but is strongly not recommended. Please wait until cancellation is done (your computer MAY restart)."
     Show-MessageBox -Text $popupText -Title "Cancellation Pending" -Icon 'Information'
 })
 
@@ -416,7 +414,7 @@ $ps = [powershell]::Create().AddScript({
             Log-Message -GuiControls $GuiControls -Message "Dell system detected..." -Color "Blue" -LogFile $LogFile -Severity 'INFO'
             if (Test-Path $Config.DellUpdateCLI) {
                 Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $Config.DellUpdateCLI /scan } -LogFile $LogFile
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=enable } -LogFile $LogFile
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=disable } -LogFile $LogFile
             } else {
                 Log-Message -GuiControls $GuiControls -Message "Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
                 try {
@@ -474,13 +472,13 @@ $ps = [powershell]::Create().AddScript({
             Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
             $GuiControls.ProgressBar.Value++
 
-            Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 5 seconds..." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
+            Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 120 seconds..." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
             Start-Sleep -Seconds 120
             Restart-Computer -Force
         }
         else {
             Log-Message -GuiControls $GuiControls -Message "Maintenance halted. The system will not be restarted automatically." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 120
             if ($GuiControls.Form.IsHandleCreated) {
                 $GuiControls.Form.Invoke([Action]{ $GuiControls.Form.Close() })
             }

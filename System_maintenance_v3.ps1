@@ -299,7 +299,7 @@ $gui.CancelButton.add_Click({
     $gui.CancelButton.Text = "Cancelling..."
     $gui.CancelButton.Enabled = $false
     $cancellationState.CancelRequested = $true
-    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current long task is finished. This may take several minutes. You can technically work in other tasks in the meantime but is strongly not recommended. Please wait until cancellation is done (your computer MAY restart)."
+    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current task is finished. This may take several minutes.`n`nIt is strongly not recommended to work on other tasks. The computer will NOT restart. The window will close when cancellation is complete.`n`nWe strongly recommend restarting the computer ASAP."
     Show-MessageBox -Text $popupText -Title "Cancellation Pending" -Icon 'Information'
 })
 

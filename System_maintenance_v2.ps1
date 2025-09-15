@@ -122,10 +122,11 @@ $config = @{
     CompanyPortalAppUri = "companyportal:ApplicationId=9f4e3de0-34be-47c0-be5d-b2c237f85125"
     DellInstallerUrl    = "https://dl.dell.com/FOLDER13309509M/1/Dell-Command-Update-Application_PPWHH_WIN64_5.5.0_A00.EXE"
     LogFile             = Join-Path -Path $env:ProgramData -ChildPath "SystemMaintenance\SystemMaintenance_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-    EventLogSource      = "SystemMaintenanceTool" # IMPROVEMENT: Defined event log source name
+    EventLogSource      = "SystemMaintenanceTool"
 }
 
 # Define the sequence of maintenance commands to be executed.
+# NOTE: Added 'SuccessCodes' for commands that return non-zero codes on success (e.g., reboot required).
 $maintenanceCommands = @(
     @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
@@ -155,8 +156,8 @@ $maintenanceCommands = @(
     @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
     @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
-    @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth } },
-    @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow } },
+    @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth }; SuccessCodes = @(3010) },
+    @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow }; SuccessCodes = @(3010) },
     @{ Name = "Scheduling Disk Check (C:)";       Command = { cmd.exe /c "echo y | chkdsk C: /f /r" }; Note = "This will run on the next restart." }
 )
 
@@ -255,13 +256,12 @@ This tool will now close.
     exit
 }
 
-# IMPROVEMENT: Create Event Log source if it doesn't exist. This runs once with admin rights.
+# Create Event Log source if it doesn't exist
 if (-not ([System.Diagnostics.EventLog]::SourceExists($config.EventLogSource))) {
     try {
         New-EventLog -LogName "Application" -Source $config.EventLogSource -ErrorAction Stop
     }
     catch {
-        # If this fails, we just won't log to the event log, but we can warn the user.
         Show-MessageBox -Text "Could not create the Event Log source '$($config.EventLogSource)'. Logging will be limited to the text file." -Title "Logging Warning" -Icon 'Warning'
     }
 }
@@ -287,7 +287,7 @@ $scriptParameters = @{
     Config              = $config
 }
 
-# FIX: All necessary functions are now defined INSIDE the script block for the background job.
+# All necessary functions are now defined INSIDE the script block for the background job.
 $ps = [powershell]::Create().AddScript({
     param($params)
     
@@ -298,8 +298,6 @@ $ps = [powershell]::Create().AddScript({
     $config              = $params.Config
 
     # --- CORE FUNCTIONS (Copied inside the runspace) ---
-    
-    # IMPROVEMENT: Log-Message now accepts a Severity level and writes to the Windows Event Log.
     function Log-Message {
         [CmdletBinding()]
         param(
@@ -312,14 +310,12 @@ $ps = [powershell]::Create().AddScript({
         $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Severity] - $Message"
         $logEntry | Out-File -FilePath $LogFile -Append
 
-        # Map severity to EventLog EntryType
         $eventType = switch ($Severity) {
             'ERROR' { 'Error' }
             'WARN'  { 'Warning' }
             default { 'Information' }
         }
         
-        # Write to event log if the source exists
         if ([System.Diagnostics.EventLog]::SourceExists($config.EventLogSource)) {
             Write-EventLog -LogName "Application" -Source $config.EventLogSource -EventId 1000 -EntryType $eventType -Message $Message
         }
@@ -339,34 +335,40 @@ $ps = [powershell]::Create().AddScript({
             $logBox.ScrollToCaret()
         }
     }
-    
-    # IMPROVEMENT: Added a full Try/Catch block to handle terminating errors, not just exit codes.
+
     function Invoke-LoggedCommand {
         [CmdletBinding()]
         param(
             [Parameter(Mandatory)] $GuiControls,
             [Parameter(Mandatory)] [scriptblock]$Command,
             [Parameter(Mandatory)] [string]$Name,
-            [Parameter(Mandatory)] [string]$LogFile
+            [Parameter(Mandatory)] [string]$LogFile,
+            [array]$SuccessCodes
         )
         Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile -Severity 'INFO'
         
         try {
-            # Execute the command, redirecting all streams (including errors) to the output variable
             $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
 
-            if ($LASTEXITCODE -ne 0) {
-                # This catches errors from external executables (like .exe files)
-                Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
-            } else {
-                # Success case
+            if ($LASTEXITCODE -eq 0) {
+                # Green Light: Perfect success
                 Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile -Severity 'INFO'
                 if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
             }
+            elseif ($SuccessCodes -and $LASTEXITCODE -in $SuccessCodes) {
+                # Yellow Light: Success with a special condition (e.g., reboot required)
+                $warnMsg = "Task '$Name' completed with a special status. This is not an error. It often means repairs were made and a restart is required to finalize them."
+                Log-Message -GuiControls $GuiControls -Message $warnMsg -Color "Orange" -LogFile $LogFile -Severity 'WARN'
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
+            }
+            else {
+                # Red Light: A genuine error
+                Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
+            }
         }
         catch {
-            # This catches terminating errors from PowerShell cmdlets
+            # Critical failure from PowerShell itself
             Log-Message -GuiControls $GuiControls -Message "A critical error occurred while running '$Name'." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
             $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } }
         }
@@ -428,7 +430,7 @@ $ps = [powershell]::Create().AddScript({
         $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
 
         foreach ($item in $MaintenanceCommands) {
-            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile
+            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile -SuccessCodes $item.SuccessCodes
             if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile -Severity 'WARN' }
             $GuiControls.ProgressBar.Value++
         }

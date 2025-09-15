@@ -125,7 +125,7 @@ $config = @{
     EventLogSource      = "SystemMaintenanceTool"
 }
 
-# CHANGED: The order of commands has been optimized for reliability.
+# The order of commands has been optimized for reliability.
 $maintenanceCommands = @(
     # 1. System File Integrity First: Ensures the OS is healthy before updates.
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
@@ -198,7 +198,6 @@ function Initialize-GUI {
     $label = New-Object System.Windows.Forms.Label -Property @{ Text = "Status Log:"; Dock = "Top" }
     $logBox = New-Object System.Windows.Forms.RichTextBox -Property @{ Font = "Consolas, 10"; ReadOnly = $true; ScrollBars = "Vertical"; Dock = "Fill" }
     
-    # NEW: Panel to hold the progress bar and cancel button for better layout.
     $bottomPanel = New-Object System.Windows.Forms.Panel -Property @{ Height = 40; Dock = "Bottom" }
     $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Left"; Width = $form.Width - 120 }
     $cancelButton = New-Object System.Windows.Forms.Button -Property @{ Text = "Cancel"; Dock = "Right"; Width = 100 }
@@ -206,7 +205,6 @@ function Initialize-GUI {
     $bottomPanel.Controls.AddRange(@($progressBar, $cancelButton))
     $form.Controls.AddRange(@($logBox, $label, $bottomPanel))
 
-    # NEW: Handle form resizing to keep the progress bar width correct.
     $form.add_Resize({ $progressBar.Width = $form.ClientRectangle.Width - 120 })
 
     return [PSCustomObject]@{
@@ -298,10 +296,8 @@ if (-not (Test-Path -Path $config.LogDirectory)) {
 # Initialize GUI and prepare for background job
 $gui = Initialize-GUI
 
-# NEW: Create a thread-safe object to handle the cancellation signal from the GUI.
 $cancellationState = [hashtable]::Synchronized(@{ CancelRequested = $false })
 
-# NEW: Add the click event handler for the cancel button.
 $gui.CancelButton.add_Click({
     $gui.CancelButton.Text = "Cancelling..."
     $gui.CancelButton.Enabled = $false
@@ -313,7 +309,7 @@ $scriptParameters = @{
     LogFile             = $config.LogFile
     MaintenanceCommands = $maintenanceCommands
     Config              = $config
-    CancellationState   = $cancellationState # Pass the cancellation object to the background job
+    CancellationState   = $cancellationState
 }
 
 # All necessary functions are now defined INSIDE the script block for the background job.
@@ -325,7 +321,7 @@ $ps = [powershell]::Create().AddScript({
     $logFile             = $params.LogFile
     $maintenanceCommands = $params.MaintenanceCommands
     $config              = $params.Config
-    $cancellationState   = $params.CancellationState # NEW: Unpack cancellation object
+    $cancellationState   = $params.CancellationState
 
     # --- CORE FUNCTIONS (Copied inside the runspace) ---
     function Log-Message {
@@ -338,7 +334,7 @@ $ps = [powershell]::Create().AddScript({
             [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Severity = 'INFO',
             [switch]$NoGuiOutput
         )
-        # Always log to the file and Event Log.
+        # Always log to the file with the full severity prefix.
         $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Severity] - $Message"
         $logEntry | Out-File -FilePath $LogFile -Append
 
@@ -365,6 +361,7 @@ $ps = [powershell]::Create().AddScript({
                 $logBox.SelectionStart = $logBox.TextLength
                 $logBox.SelectionLength = 0
                 $logBox.SelectionColor = $Color
+                # This line formats the GUI output without the severity prefix.
                 $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
                 $logBox.ScrollToCaret()
             }
@@ -387,21 +384,25 @@ $ps = [powershell]::Create().AddScript({
 
             if ($LASTEXITCODE -eq 0) {
                 Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile -Severity 'INFO'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' -NoGuiOutput } } }
+                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
             }
             elseif ($SuccessCodes -and $LASTEXITCODE -in $SuccessCodes) {
                 $warnMsg = "Task '$Name' completed with a special status. This is not an error. It often means repairs were made and a restart is required to finalize them."
                 Log-Message -GuiControls $GuiControls -Message $warnMsg -Color "Orange" -LogFile $LogFile -Severity 'WARN'
-                if ($output) { $output | For-EachObject { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' -NoGuiOutput } } }
+                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
+                if ($output) { $output | For-EachObject { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
             }
             else {
                 Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' -NoGuiOutput } } }
+                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
             }
         }
         catch {
             Log-Message -GuiControls $GuiControls -Message "A critical error occurred while running '$Name'." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-            $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' -NoGuiOutput } }
+            # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
+            $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } }
         }
     }
 
@@ -454,27 +455,25 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] $LogFile,
             [Parameter(Mandatory)] $MaintenanceCommands,
             [Parameter(Mandatory)] $Config,
-            [Parameter(Mandatory)] $CancellationState # NEW: Receive cancellation object
+            [Parameter(Mandatory)] $CancellationState
         )
         Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -LogFile $LogFile -Severity 'INFO'
         Log-Message -GuiControls $GuiControls -Message "Log file for this session is: $LogFile" -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
         
         $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
-        $operationCancelled = $false # NEW: Local flag to track cancellation
+        $operationCancelled = $false
 
         foreach ($item in $maintenanceCommands) {
-            # NEW: Check for cancellation before starting the next command.
             if ($CancellationState.CancelRequested) {
                 Log-Message -GuiControls $GuiControls -Message "Operation cancelled by user. Halting maintenance tasks." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
                 $operationCancelled = $true
-                break # Exit the loop
+                break
             }
             Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile -SuccessCodes $item.SuccessCodes
             if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile -Severity 'WARN' }
             $GuiControls.ProgressBar.Value++
         }
 
-        # NEW: Only run final steps and restart if the operation was not cancelled.
         if (-not $operationCancelled) {
             Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
             $GuiControls.ProgressBar.Value++
@@ -484,7 +483,6 @@ $ps = [powershell]::Create().AddScript({
             Restart-Computer -Force
         }
         else {
-            # NEW: Provide a final message when cancelled and close the form.
             Log-Message -GuiControls $GuiControls -Message "Maintenance halted. The system will not be restarted automatically." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
             Start-Sleep -Seconds 5
             if ($GuiControls.Form.IsHandleCreated) {

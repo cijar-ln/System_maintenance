@@ -125,7 +125,6 @@ $config = @{
     EventLogSource      = "SystemMaintenanceTool"
 }
 
-# The order of commands has been optimized for reliability.
 $maintenanceCommands = @(
     # 1. System File Integrity First: Ensures the OS is healthy before updates.
     @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
@@ -302,6 +301,8 @@ $gui.CancelButton.add_Click({
     $gui.CancelButton.Text = "Cancelling..."
     $gui.CancelButton.Enabled = $false
     $cancellationState.CancelRequested = $true
+    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current long task is finished. This may take several minutes."
+    Show-MessageBox -Text $popupText -Title "Cancellation Pending" -Icon 'Information'
 })
 
 $scriptParameters = @{
@@ -312,7 +313,6 @@ $scriptParameters = @{
     CancellationState   = $cancellationState
 }
 
-# All necessary functions are now defined INSIDE the script block for the background job.
 $ps = [powershell]::Create().AddScript({
     param($params)
     
@@ -323,7 +323,7 @@ $ps = [powershell]::Create().AddScript({
     $config              = $params.Config
     $cancellationState   = $params.CancellationState
 
-    # --- CORE FUNCTIONS (Copied inside the runspace) ---
+    # --- CORE FUNCTIONS  ---
     function Log-Message {
         [CmdletBinding()]
         param(
@@ -348,7 +348,7 @@ $ps = [powershell]::Create().AddScript({
             Write-EventLog -LogName "Application" -Source $config.EventLogSource -EventId 1000 -EntryType $eventType -Message $Message
         }
 
-        # Only write to the GUI if the -NoGuiOutput switch was NOT used.
+        # Only write to the GUI if the -NoGuiOutput switch
         if (-not $NoGuiOutput) {
             $logBox = $GuiControls.LogBox
             if ($logBox.InvokeRequired) {
@@ -384,24 +384,20 @@ $ps = [powershell]::Create().AddScript({
 
             if ($LASTEXITCODE -eq 0) {
                 Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile -Severity 'INFO'
-                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
                 if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
             }
             elseif ($SuccessCodes -and $LASTEXITCODE -in $SuccessCodes) {
                 $warnMsg = "Task '$Name' completed with a special status. This is not an error. It often means repairs were made and a restart is required to finalize them."
                 Log-Message -GuiControls $GuiControls -Message $warnMsg -Color "Orange" -LogFile $LogFile -Severity 'WARN'
-                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
                 if ($output) { $output | For-EachObject { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
             }
             else {
                 Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-                # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
                 if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
             }
         }
         catch {
             Log-Message -GuiControls $GuiControls -Message "A critical error occurred while running '$Name'." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-            # CHANGED: The -NoGuiOutput switch has been removed to show detailed logs in the GUI.
             $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } }
         }
     }

@@ -335,7 +335,8 @@ $ps = [powershell]::Create().AddScript({
                 $logBox.SelectionStart = $logBox.TextLength
                 $logBox.SelectionLength = 0
                 $logBox.SelectionColor = $Color
-                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') [$Severity] - $Message`n")
+                # FINAL CHANGE: Removed the [$Severity] prefix from the GUI output.
+                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
                 $logBox.ScrollToCaret()
             }
         }
@@ -439,7 +440,7 @@ $ps = [powershell]::Create().AddScript({
         
         $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
 
-        foreach ($item in $MaintenanceCommands) {
+        foreach ($item in $maintenanceCommands) {
             Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile -SuccessCodes $item.SuccessCodes
             if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile -Severity 'WARN' }
             $GuiControls.ProgressBar.Value++

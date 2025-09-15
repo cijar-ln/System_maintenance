@@ -199,7 +199,7 @@ function Initialize-GUI {
     $logBox = New-Object System.Windows.Forms.RichTextBox -Property @{ Font = "Consolas, 10"; ReadOnly = $true; ScrollBars = "Vertical"; Dock = "Fill" }
     
     $bottomPanel = New-Object System.Windows.Forms.Panel -Property @{ Height = 40; Dock = "Bottom" }
-    $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Left"; Width = $form.Width - 120 }
+    $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Left"; Width = $form.Width - 840 }
     $cancelButton = New-Object System.Windows.Forms.Button -Property @{ Text = "Cancel"; Dock = "Right"; Width = 100 }
     
     $bottomPanel.Controls.AddRange(@($progressBar, $cancelButton))

@@ -362,7 +362,7 @@ $ps = [powershell]::Create().AddScript({
                 $logBox.SelectionLength = 0
                 $logBox.SelectionColor = $Color
                 # This line formats the GUI output without the severity prefix.
-                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
+                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message" + [System.Environment]::NewLine)
                 $logBox.ScrollToCaret()
             }
         }
@@ -479,7 +479,7 @@ $ps = [powershell]::Create().AddScript({
             $GuiControls.ProgressBar.Value++
 
             Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 5 seconds..." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 120
             Restart-Computer -Force
         }
         else {

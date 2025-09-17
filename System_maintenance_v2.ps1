@@ -121,7 +121,7 @@ $config = @{
     HPImageAssistant    = "C:\Program Files (x86)\HP\HP Image Assistant\HPImageAssistant.exe"
     CompanyPortalAppUri = "companyportal:ApplicationId=9f4e3de0-34be-47c0-be5d-b2c237f85125"
     DellInstallerUrl    = "https://dl.dell.com/FOLDER13309509M/1/Dell-Command-Update-Application_PPWHH_WIN64_5.5.0_A00.EXE"
-    DellInstallerHash   = "E80D51ABC9E8171BB30A586E992C3BD860DFE877CAFC099C077BA8922349048C"
+    DellInstallerHash   = "E80D51ABC9E8171BB30A586E992C3BD860DFE877CAFC099C077BA8922349048C" # SHA256 for version 5.5.0
     LogFile             = Join-Path -Path $env:ProgramData -ChildPath "SystemMaintenance\SystemMaintenance_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
     EventLogSource      = "SystemMaintenanceTool"
 }
@@ -413,45 +413,50 @@ $ps = [powershell]::Create().AddScript({
 
         if ($manufacturer -like "*Dell*") {
             Log-Message -GuiControls $GuiControls -Message "Dell system detected..." -Color "Blue" -LogFile $LogFile -Severity 'INFO'
-          # --- DYNAMIC PATH SEARCH START ---
-          $dcuCliPath = $Config.DellUpdateCLI # Default to hardcoded path
-          try {
-              # Find the application in the registry (check both 64-bit and 32-bit views)
-              $regPath = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-              $dellApp = Get-ItemProperty $regPath | Where-Object { $_.DisplayName -like "Dell Command | Update*" } | Select-Object -First 1
-              
-              if ($dellApp) {
-                  $installLocation = $dellApp.InstallLocation
-                  $dynamicPath = Join-Path -Path $installLocation -ChildPath "dcu-cli.exe"
-                  if (Test-Path $dynamicPath) {
-                      $dcuCliPath = $dynamicPath
-                      Log-Message -GuiControls $GuiControls -Message "Found Dell Command | Update at: $dcuCliPath" -LogFile $LogFile
-                  }
-              }
-          } catch {
-              Log-Message -GuiControls $GuiControls -Message "Could not search registry, using default path." -LogFile $LogFile -Severity 'WARN'
-          }
-          # --- DYNAMIC PATH SEARCH END ---
+            
+            # --- DYNAMIC PATH SEARCH START ---
+            $dcuCliPath = $Config.DellUpdateCLI # Default to hardcoded path
+            try {
+                # Find the application in the registry (check both 64-bit and 32-bit views)
+                $regPaths = @(
+                    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                    "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+                )
+                $dellApp = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "Dell Command | Update*" } | Select-Object -First 1
+                
+                if ($dellApp) {
+                    $installLocation = $dellApp.InstallLocation
+                    $dynamicPath = Join-Path -Path $installLocation -ChildPath "dcu-cli.exe"
+                    if (Test-Path $dynamicPath) {
+                        $dcuCliPath = $dynamicPath
+                        Log-Message -GuiControls $GuiControls -Message "Found Dell Command | Update at: $dcuCliPath" -LogFile $LogFile
+                    }
+                }
+            } catch {
+                Log-Message -GuiControls $GuiControls -Message "Could not search registry, using default path." -LogFile $LogFile -Severity 'WARN'
+            }
+            # --- DYNAMIC PATH SEARCH END ---
 
-
-            if (Test-Path $Config.DellUpdateCLI) {
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $Config.DellUpdateCLI /scan } -LogFile $LogFile
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=disable } -LogFile $LogFile
+            if (Test-Path $dcuCliPath) {
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $dcuCliPath /scan } -LogFile $LogFile
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $dcuCliPath /applyUpdates -reboot=disable } -LogFile $LogFile
             } else {
                 Log-Message -GuiControls $GuiControls -Message "Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
                 try {
                     $tempPath = Join-Path $env:TEMP "DCU_Installer.exe"
                     Invoke-WebRequest -Uri $Config.DellInstallerUrl -OutFile $tempPath -ErrorAction Stop
-                    # --- HASH VERIFICATION STEP START ---
-                Log-Message -GuiControls $GuiControls -Message "Verifying installer integrity..." -LogFile $LogFile
-                $downloadedHash = (Get-FileHash -Path $tempPath -Algorithm SHA256).Hash
-                
-                if ($downloadedHash -ne $Config.DellInstallerHash) {
-                    Log-Message -GuiControls $GuiControls -Message "HASH MISMATCH! The downloaded file is corrupt or has been tampered with. Aborting installation." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
-                    Remove-Item -Path $tempPath -Force
-                    return # Exit the Hash verification function
-                }
-
+                    
+                    # --- HASH VERIFICATION ---
+                    Log-Message -GuiControls $GuiControls -Message "Verifying installer integrity..." -LogFile $LogFile
+                    $downloadedHash = (Get-FileHash -Path $tempPath -Algorithm SHA256).Hash
+                    
+                    if ($downloadedHash.ToUpper() -ne $Config.DellInstallerHash.ToUpper()) {
+                        Log-Message -GuiControls $GuiControls -Message "HASH MISMATCH! The downloaded file is corrupt or has been tampered with. Aborting installation." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
+                        Remove-Item -Path $tempPath -Force
+                        return 
+                    }
+                    Log-Message -GuiControls $GuiControls -Message "Installer verified successfully." -Color "Green" -LogFile $LogFile
+                    
                     Start-Process -FilePath $tempPath -ArgumentList "/s" -Wait -ErrorAction Stop
                     Remove-Item -Path $tempPath -Force
                     Log-Message -GuiControls $GuiControls -Message "ACTION REQUIRED: Dell Command | Update installed. Please run it manually after restart." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
@@ -462,31 +467,34 @@ $ps = [powershell]::Create().AddScript({
             }
         }
         elseif ($manufacturer -like "*HP*") {
-            Log-Message -GuiControls $GuiControls -Message "HP system detected..." -Color "Blue" -LogFile $LogFile -Severity 'INFO'
-            if (Test-Path $Config.HPImageAssistant) {
-
+            Log-Message -GuiControls $GuiControls -Message "HP system detected..." -Color "Blue" -LogFile $LogFile
+            
             # --- DYNAMIC PATH SEARCH START ---
-                $hpiaPath = $Config.HPImageAssistant # Default to hardcoded path
-                try {
-                    # Find the application in the registry (check both 64-bit and 32-bit views)
-                    $regPath = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-                    $hpApp = Get-ItemProperty $regPath | Where-Object { $_.DisplayName -like "HP Image Assistant*" } | Select-Object -First 1
-                    
-                    if ($hpApp) {
-                        $installLocation = $hpApp.InstallLocation
-                        # The InstallLocation for HPIA often already includes the final folder, so we just append the .exe
-                        $dynamicPath = Join-Path -Path $installLocation -ChildPath "HPImageAssistant.exe"
-                        if (Test-Path $dynamicPath) {
-                            $hpiaPath = $dynamicPath
-                            Log-Message -GuiControls $GuiControls -Message "Found HP Image Assistant at: $hpiaPath" -LogFile $LogFile
-                        }
+            $hpiaPath = $Config.HPImageAssistant # Default to hardcoded path
+            try {
+                # Find the application in the registry (check both 64-bit and 32-bit views)
+                 $regPaths = @(
+                    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                    "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+                )
+                $hpApp = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "HP Image Assistant*" } | Select-Object -First 1
+                
+                if ($hpApp) {
+                    $installLocation = $hpApp.InstallLocation
+                    $dynamicPath = Join-Path -Path $installLocation -ChildPath "HPImageAssistant.exe"
+                    if (Test-Path $dynamicPath) {
+                        $hpiaPath = $dynamicPath
+                        Log-Message -GuiControls $GuiControls -Message "Found HP Image Assistant at: $hpiaPath" -LogFile $LogFile
                     }
-                } catch {
-                    Log-Message -GuiControls $GuiControls -Message "Could not search registry, using default path." -LogFile $LogFile -Severity 'WARN'
                 }
-                # --- DYNAMIC PATH SEARCH END ---
-
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $Config.HPImageAssistant /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
+            } catch {
+                Log-Message -GuiControls $GuiControls -Message "Could not search registry, using default path." -LogFile $LogFile -Severity 'WARN'
+            }
+            # --- DYNAMIC PATH SEARCH END ---
+            
+            # --- CORRECTED LOGIC BLOCK ---
+            if (Test-Path $hpiaPath) {
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $hpiaPath /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
             } else {
                 Log-Message -GuiControls $GuiControls -Message "HP Image Assistant not installed. Please download from: https://support.hp.com/us-en/help/hp-support-assistant" -Color "Orange" -LogFile $LogFile -Severity 'WARN'
             }
@@ -532,7 +540,7 @@ $ps = [powershell]::Create().AddScript({
         }
         else {
             Log-Message -GuiControls $GuiControls -Message "Maintenance halted. The system will not be restarted automatically." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
-            Start-Sleep -Seconds 120
+            Start-Sleep -Seconds 5
             if ($GuiControls.Form.IsHandleCreated) {
                 $GuiControls.Form.Invoke([Action]{ $GuiControls.Form.Close() })
             }

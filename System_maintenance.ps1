@@ -122,13 +122,20 @@ $config = @{
     CompanyPortalAppUri = "companyportal:ApplicationId=9f4e3de0-34be-47c0-be5d-b2c237f85125"
     DellInstallerUrl    = "https://dl.dell.com/FOLDER13309509M/1/Dell-Command-Update-Application_PPWHH_WIN64_5.5.0_A00.EXE"
     LogFile             = Join-Path -Path $env:ProgramData -ChildPath "SystemMaintenance\SystemMaintenance_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+    EventLogSource      = "SystemMaintenanceTool"
 }
 
-# Define the sequence of maintenance commands to be executed.
 $maintenanceCommands = @(
-    @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
+    # 1. System File Integrity First: Ensures the OS is healthy before updates.
+    @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
+    @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth }; SuccessCodes = @(3010) },
+    @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow }; SuccessCodes = @(3010) },
+
+    # 2. Policy and UI Refreshes
     @{ Name = "Forcing Group Policy Update";    Command = { gpupdate /force } },
     @{ Name = "Restarting Windows Explorer";    Command = { Stop-Process -Name explorer -Force; Start-Process explorer } },
+    
+    # 3. Major Updates: Run on a verified healthy system.
     @{
         Name = "Install/Run PSWindowsUpdate Module"
         Command = {
@@ -138,7 +145,7 @@ $maintenanceCommands = @(
                     try {
                         Install-Module -Name PSWindowsUpdate -Force -AcceptLicense -Scope AllUsers -ErrorAction Stop
                     } catch {
-                        Write-Error "Failed to install PSWindowsUpdate module. Please check internet connectivity. `n$($_.Exception.Message)"
+                        Write-Error "Failed to install PSWindowsUpdate module. Please check internet connectivity. `n`$(`$_.Exception.Message)"
                         return 
                     }
                 } else {
@@ -146,16 +153,18 @@ $maintenanceCommands = @(
                 }
                 
                 Write-Output 'Searching for, downloading, and installing all applicable updates...'
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -Verbose -NoReboot
 "@
             powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $updateCommand
         }
     },
-    @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset } },
-    @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset } },
-    @{ Name = "Component Store Health Scan (DISM)"; Command = { DISM /Online /Cleanup-Image /ScanHealth } },
-    @{ Name = "Component Store Restore (DISM)"; Command = { DISM /Online /Cleanup-Image /RestoreHealth } },
-    @{ Name = "System File Integrity Scan (SFC)";   Command = { sfc /scannow } },
+
+    # 4. Network Resets: Performed after all network-dependent tasks are complete.
+    @{ Name = "Flushing DNS Cache";             Command = { ipconfig /flushdns } },
+    @{ Name = "Resetting Winsock Catalog";      Command = { netsh winsock reset }; SuccessCodes = @(1) },
+    @{ Name = "Resetting TCP/IP Stack";         Command = { netsh int ip reset }; SuccessCodes = @(1) },
+
+    # 5. Schedule Disk Check: Final task before mandatory restart.
     @{ Name = "Scheduling Disk Check (C:)";       Command = { cmd.exe /c "echo y | chkdsk C: /f /r" }; Note = "This will run on the next restart." }
 )
 
@@ -187,13 +196,19 @@ function Initialize-GUI {
 
     $label = New-Object System.Windows.Forms.Label -Property @{ Text = "Status Log:"; Dock = "Top" }
     $logBox = New-Object System.Windows.Forms.RichTextBox -Property @{ Font = "Consolas, 10"; ReadOnly = $true; ScrollBars = "Vertical"; Dock = "Fill" }
-    $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Bottom" }
-    $form.Controls.AddRange(@($logBox, $label, $progressBar))
+    
+    $bottomPanel = New-Object System.Windows.Forms.Panel -Property @{ Height = 40; Dock = "Bottom" }
+    $progressBar = New-Object System.Windows.Forms.ProgressBar -Property @{ Style = "Continuous"; Dock = "Fill"}
+    $cancelButton = New-Object System.Windows.Forms.Button -Property @{ Text = "Cancel"; Dock = "Right"; Width = 100 }
+    
+    $bottomPanel.Controls.AddRange(@($progressBar, $cancelButton))
+    $form.Controls.AddRange(@($logBox, $label, $bottomPanel))
 
     return [PSCustomObject]@{
-        Form        = $form
-        LogBox      = $logBox
-        ProgressBar = $progressBar
+        Form         = $form
+        LogBox       = $logBox
+        ProgressBar  = $progressBar
+        CancelButton = $cancelButton
     }
 }
 
@@ -254,6 +269,16 @@ This tool will now close.
     exit
 }
 
+# Create Event Log source if it doesn't exist
+if (-not ([System.Diagnostics.EventLog]::SourceExists($config.EventLogSource))) {
+    try {
+        New-EventLog -LogName "Application" -Source $config.EventLogSource -ErrorAction Stop
+    }
+    catch {
+        Show-MessageBox -Text "Could not create the Event Log source '$($config.EventLogSource)'. Logging will be limited to the text file." -Title "Logging Warning" -Icon 'Warning'
+    }
+}
+
 # Create Logging Directory
 if (-not (Test-Path -Path $config.LogDirectory)) {
     try {
@@ -268,14 +293,24 @@ if (-not (Test-Path -Path $config.LogDirectory)) {
 # Initialize GUI and prepare for background job
 $gui = Initialize-GUI
 
+$cancellationState = [hashtable]::Synchronized(@{ CancelRequested = $false })
+
+$gui.CancelButton.add_Click({
+    $gui.CancelButton.Text = "Cancelling..."
+    $gui.CancelButton.Enabled = $false
+    $cancellationState.CancelRequested = $true
+    $popupText = "Cancellation signal received.`n`nThe script will stop safely after the current task is finished. This may take several minutes.`n`nIt is strongly not recommended to work on other tasks. The computer will NOT restart. The window will close when cancellation is complete.`n`nWe strongly recommend restarting the computer ASAP."
+    Show-MessageBox -Text $popupText -Title "Cancellation Pending" -Icon 'Information'
+})
+
 $scriptParameters = @{
     GuiControls         = $gui
     LogFile             = $config.LogFile
     MaintenanceCommands = $maintenanceCommands
     Config              = $config
+    CancellationState   = $cancellationState
 }
 
-# FIX: All necessary functions are now defined INSIDE the script block for the background job.
 $ps = [powershell]::Create().AddScript({
     param($params)
     
@@ -284,31 +319,50 @@ $ps = [powershell]::Create().AddScript({
     $logFile             = $params.LogFile
     $maintenanceCommands = $params.MaintenanceCommands
     $config              = $params.Config
+    $cancellationState   = $params.CancellationState
 
-    # --- CORE FUNCTIONS (Copied inside the runspace) ---
+    # --- CORE FUNCTIONS  ---
     function Log-Message {
         [CmdletBinding()]
         param(
             [Parameter(Mandatory)] $GuiControls,
             [Parameter(Mandatory)] [string]$Message,
             [System.Drawing.Color]$Color = 'Black',
-            [Parameter(Mandatory)] [string]$LogFile
+            [Parameter(Mandatory)] [string]$LogFile,
+            [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Severity = 'INFO',
+            [switch]$NoGuiOutput
         )
-        "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message" | Out-File -FilePath $LogFile -Append
+        # Always log to the file with the full severity prefix.
+        $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Severity] - $Message"
+        $logEntry | Out-File -FilePath $LogFile -Append
 
-        $logBox = $GuiControls.LogBox
-        if ($logBox.InvokeRequired) {
-            $logBox.Invoke([Action[string, System.Drawing.Color]] {
-                param([string]$msg, [System.Drawing.Color]$c)
-                Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile
-            }, $Message, $Color)
+        $eventType = switch ($Severity) {
+            'ERROR' { 'Error' }
+            'WARN'  { 'Warning' }
+            default { 'Information' }
         }
-        else {
-            $logBox.SelectionStart = $logBox.TextLength
-            $logBox.SelectionLength = 0
-            $logBox.SelectionColor = $Color
-            $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message`n")
-            $logBox.ScrollToCaret()
+        
+        if ([System.Diagnostics.EventLog]::SourceExists($config.EventLogSource)) {
+            Write-EventLog -LogName "Application" -Source $config.EventLogSource -EventId 1000 -EntryType $eventType -Message $Message
+        }
+
+        # Only write to the GUI if the -NoGuiOutput switch
+        if (-not $NoGuiOutput) {
+            $logBox = $GuiControls.LogBox
+            if ($logBox.InvokeRequired) {
+                $logBox.Invoke([Action[string, System.Drawing.Color, string]] {
+                    param([string]$msg, [System.Drawing.Color]$c, [string]$sev)
+                    Log-Message -GuiControls $GuiControls -Message $msg -Color $c -LogFile $LogFile -Severity $sev -NoGuiOutput:$false
+                }, $Message, $Color, $Severity)
+            }
+            else {
+                $logBox.SelectionStart = $logBox.TextLength
+                $logBox.SelectionLength = 0
+                $logBox.SelectionColor = $Color
+                # This line formats the GUI output without the severity prefix.
+                $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss') - $Message" + [System.Environment]::NewLine)
+                $logBox.ScrollToCaret()
+            }
         }
     }
 
@@ -318,18 +372,31 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] $GuiControls,
             [Parameter(Mandatory)] [scriptblock]$Command,
             [Parameter(Mandatory)] [string]$Name,
-            [Parameter(Mandatory)] [string]$LogFile
+            [Parameter(Mandatory)] [string]$LogFile,
+            [array]$SuccessCodes
         )
-        Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile
+        Log-Message -GuiControls $GuiControls -Message "Running: $Name..." -LogFile $LogFile -Severity 'INFO'
         
-        $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
+        try {
+            $output = & $Command *>&1 | ForEach-Object { $_.ToString() }
 
-        if ($LASTEXITCODE -ne 0) {
-            Log-Message -GuiControls $GuiControls -Message "ERROR: '$Name' failed. Exit Code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile
-            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile } } }
-        } else {
-            Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile
-            if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile } } }
+            if ($LASTEXITCODE -eq 0) {
+                Log-Message -GuiControls $GuiControls -Message "SUCCESS: $Name completed." -Color "Green" -LogFile $LogFile -Severity 'INFO'
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
+            }
+            elseif ($SuccessCodes -and $LASTEXITCODE -in $SuccessCodes) {
+                $warnMsg = "Task '$Name' completed with a special status. This is not an error. It often means repairs were made and a restart is required to finalize them."
+                Log-Message -GuiControls $GuiControls -Message $warnMsg -Color "Orange" -LogFile $LogFile -Severity 'WARN'
+                if ($output) { $output | For-EachObject { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Gray" -LogFile $LogFile -Severity 'INFO' } } }
+            }
+            else {
+                Log-Message -GuiControls $GuiControls -Message "Command '$Name' completed with a non-zero exit code: $LASTEXITCODE" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
+                if ($output) { $output | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } } }
+            }
+        }
+        catch {
+            Log-Message -GuiControls $GuiControls -Message "A critical error occurred while running '$Name'." -Color "Red" -LogFile $LogFile -Severity 'ERROR'
+            $_.Exception.Message | ForEach-Object { if ($_.Trim()) { Log-Message -GuiControls $GuiControls -Message "  $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR' } }
         }
     }
 
@@ -341,37 +408,37 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] [string]$LogFile
         )
         $manufacturer = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
-        Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer" -LogFile $LogFile
+        Log-Message -GuiControls $GuiControls -Message "Manufacturer detected: $manufacturer" -LogFile $LogFile -Severity 'INFO'
 
         if ($manufacturer -like "*Dell*") {
-            Log-Message -GuiControls $GuiControls -Message "Dell system detected..." -Color "Blue" -LogFile $LogFile
+            Log-Message -GuiControls $GuiControls -Message "Dell system detected..." -Color "Blue" -LogFile $LogFile -Severity 'INFO'
             if (Test-Path $Config.DellUpdateCLI) {
                 Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Scan" -Command { & $Config.DellUpdateCLI /scan } -LogFile $LogFile
-                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=enable } -LogFile $LogFile
+                Invoke-LoggedCommand -GuiControls $GuiControls -Name "Dell Update Apply" -Command { & $Config.DellUpdateCLI /applyUpdates -reboot=disable } -LogFile $LogFile
             } else {
-                Log-Message -GuiControls $GuiControls -Message "NOTE: Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile
+                Log-Message -GuiControls $GuiControls -Message "Dell Command | Update not found. Attempting automatic installation..." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
                 try {
                     $tempPath = Join-Path $env:TEMP "DCU_Installer.exe"
                     Invoke-WebRequest -Uri $Config.DellInstallerUrl -OutFile $tempPath -ErrorAction Stop
                     Start-Process -FilePath $tempPath -ArgumentList "/s" -Wait -ErrorAction Stop
                     Remove-Item -Path $tempPath -Force
-                    Log-Message -GuiControls $GuiControls -Message "ACTION REQUIRED: Dell Command | Update installed. Please run it manually after restart." -Color "Orange" -LogFile $LogFile
+                    Log-Message -GuiControls $GuiControls -Message "ACTION REQUIRED: Dell Command | Update installed. Please run it manually after restart." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
                 }
                 catch {
-                    Log-Message -GuiControls $GuiControls -Message "ERROR: Failed to install Dell Command | Update. $_" -Color "Red" -LogFile $LogFile
+                    Log-Message -GuiControls $GuiControls -Message "Failed to install Dell Command | Update. $_" -Color "Red" -LogFile $LogFile -Severity 'ERROR'
                 }
             }
         }
         elseif ($manufacturer -like "*HP*") {
-            Log-Message -GuiControls $GuiControls -Message "HP system detected..." -Color "Blue" -LogFile $LogFile
+            Log-Message -GuiControls $GuiControls -Message "HP system detected..." -Color "Blue" -LogFile $LogFile -Severity 'INFO'
             if (Test-Path $Config.HPImageAssistant) {
                 Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $Config.HPImageAssistant /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
             } else {
-                Log-Message -GuiControls $GuiControls -Message "NOTE: HP Image Assistant not installed. Please download from: https://support.hp.com/us-en/help/hp-support-assistant" -Color "Orange" -LogFile $LogFile
+                Log-Message -GuiControls $GuiControls -Message "HP Image Assistant not installed. Please download from: https://support.hp.com/us-en/help/hp-support-assistant" -Color "Orange" -LogFile $LogFile -Severity 'WARN'
             }
         }
         else {
-            Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange" -LogFile $LogFile
+            Log-Message -GuiControls $GuiControls -Message "Please check for updates using your manufacturer's tool (e.g., Lenovo Vantage)." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
         }
     }
 
@@ -381,29 +448,45 @@ $ps = [powershell]::Create().AddScript({
             [Parameter(Mandatory)] $GuiControls,
             [Parameter(Mandatory)] $LogFile,
             [Parameter(Mandatory)] $MaintenanceCommands,
-            [Parameter(Mandatory)] $Config
+            [Parameter(Mandatory)] $Config,
+            [Parameter(Mandatory)] $CancellationState
         )
-        Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -LogFile $LogFile
-        Log-Message -GuiControls $GuiControls -Message "Log file for this session is: $LogFile" -Color "DarkBlue" -LogFile $LogFile
+        Log-Message -GuiControls $GuiControls -Message "Administrator privileges confirmed. Starting maintenance..." -Color "Green" -LogFile $LogFile -Severity 'INFO'
+        Log-Message -GuiControls $GuiControls -Message "Log file for this session is: $LogFile" -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
         
         $GuiControls.ProgressBar.Maximum = $MaintenanceCommands.Count + 1
+        $operationCancelled = $false
 
-        foreach ($item in $MaintenanceCommands) {
-            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile
-            if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile }
+        foreach ($item in $maintenanceCommands) {
+            if ($CancellationState.CancelRequested) {
+                Log-Message -GuiControls $GuiControls -Message "Operation cancelled by user. Halting maintenance tasks." -Color "Orange" -LogFile $LogFile -Severity 'WARN'
+                $operationCancelled = $true
+                break
+            }
+            Invoke-LoggedCommand -GuiControls $GuiControls -Command $item.Command -Name $item.Name -LogFile $LogFile -SuccessCodes $item.SuccessCodes
+            if ($item.Note) { Log-Message -GuiControls $GuiControls -Message "NOTE: $($item.Note)" -Color "Orange" -LogFile $LogFile -Severity 'WARN' }
             $GuiControls.ProgressBar.Value++
         }
 
-        Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
-        $GuiControls.ProgressBar.Value++
+        if (-not $operationCancelled) {
+            Check-HardwareUpdates -GuiControls $GuiControls -Config $Config -LogFile $LogFile
+            $GuiControls.ProgressBar.Value++
 
-        Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 5 seconds..." -Color "DarkBlue" -LogFile $LogFile
-        Start-Sleep -Seconds 5
-        Restart-Computer -Force
+            Log-Message -GuiControls $GuiControls -Message "All maintenance tasks are complete. Restarting computer in 120 seconds..." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
+            Start-Sleep -Seconds 120
+            Restart-Computer -Force
+        }
+        else {
+            Log-Message -GuiControls $GuiControls -Message "Maintenance halted. The system will not be restarted automatically." -Color "DarkBlue" -LogFile $LogFile -Severity 'INFO'
+            Start-Sleep -Seconds 120
+            if ($GuiControls.Form.IsHandleCreated) {
+                $GuiControls.Form.Invoke([Action]{ $GuiControls.Form.Close() })
+            }
+        }
     }
 
     # --- SCRIPT EXECUTION (Inside the runspace) ---
-    Start-MaintenanceSequence -GuiControls $guiControls -LogFile $logFile -MaintenanceCommands $maintenanceCommands -Config $config
+    Start-MaintenanceSequence -GuiControls $guiControls -LogFile $logFile -MaintenanceCommands $maintenanceCommands -Config $config -CancellationState $cancellationState
 
 }).AddArgument($scriptParameters)
 

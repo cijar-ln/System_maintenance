@@ -492,7 +492,6 @@ $ps = [powershell]::Create().AddScript({
             }
             # --- DYNAMIC PATH SEARCH END ---
             
-            # --- CORRECTED LOGIC BLOCK ---
             if (Test-Path $hpiaPath) {
                 Invoke-LoggedCommand -GuiControls $GuiControls -Name "HP Image Assistant Update" -Command { & $hpiaPath /Operation:Analyze /Action:Install /Silent } -LogFile $LogFile
             } else {
